@@ -1,8 +1,13 @@
-// Keeps the agent connected to the gateway: enrolls once, then sends a heartbeat every 30 seconds.
+// Keeps the agent connected to the gateway:
+//   1. enrolls once with a one-time code
+//   2. swaps encryption public keys with the gateway (and pins the gateway's key)
+//   3. sends a heartbeat every 30 seconds
 // If the gateway or internet is down, the agent keeps working locally and retries.
 
+import crypto from "node:crypto";
 import { loadOrCreateKeys, loadIdentity, saveIdentity } from "./identity.js";
 import { createGatewayClient } from "./gateway-client.js";
+import { deriveKeys } from "./crypto-box.js";
 import { log } from "./logger.js";
 
 const HEARTBEAT_MS = 30_000;
@@ -25,7 +30,7 @@ export async function connectToGateway(config, getStatus) {
     const result = await client.enroll({
       code: config.enrollCode,
       deviceName: config.deviceName,
-      publicKeyPem: keys.publicKeyPem,
+      publicKeyPem: keys.signing.publicKeyPem,
     });
     identity = {
       deviceId: result.deviceId,
@@ -39,17 +44,44 @@ export async function connectToGateway(config, getStatus) {
     log.info(`Enrolled as ${identity.deviceId} for client "${identity.clientName}"`);
   }
 
-  const auth = { deviceId: identity.deviceId, privateKey: keys.privateKey };
+  const auth = { deviceId: identity.deviceId, privateKey: keys.signing.privateKey };
+  let cryptoKeys = null;
   let online = null;
+
+  // Swap X25519 public keys with the gateway once, then derive the encryption keys.
+  // The gateway's key is pinned: if it ever changes, the agent refuses to send data.
+  async function ensureKeys() {
+    if (cryptoKeys) return cryptoKeys;
+    const result = await client.signedPost("/api/key-exchange", { kxPublicKey: keys.exchange.publicKeyPem }, auth);
+    const gatewayKey = result.gatewayKxPublicKey;
+
+    if (!identity.gatewayKxPublicKey) {
+      identity.gatewayKxPublicKey = gatewayKey;
+      saveIdentity(config.dataDir, identity);
+      log.info("Encryption keys exchanged with gateway");
+    } else if (identity.gatewayKxPublicKey !== gatewayKey) {
+      const err = new Error("SECURITY ALERT: gateway encryption key changed! Refusing to send data (possible impersonation).");
+      err.security = true;
+      throw err;
+    }
+
+    cryptoKeys = deriveKeys(keys.exchange.privateKey, crypto.createPublicKey(identity.gatewayKxPublicKey), identity.deviceId);
+    return cryptoKeys;
+  }
 
   async function heartbeat() {
     try {
       await client.signedPost("/api/heartbeat", getStatus(), auth);
+      await ensureKeys();
       if (online !== true) log.info("Connected to gateway");
       online = true;
     } catch (err) {
-      if (err.status === 401) {
+      if (err.security) {
+        log.error(err.message);
+      } else if (err.status === 401) {
         log.error("Gateway rejected this device (revoked, or clock is more than 5 minutes off).");
+      } else if (err.status) {
+        log.error(err.message);
       } else if (online !== false) {
         log.warn(`Gateway unreachable (${err.cause?.code || err.message}). Working offline, will keep retrying.`);
       }
@@ -59,5 +91,13 @@ export async function connectToGateway(config, getStatus) {
 
   await heartbeat();
   const timer = setInterval(heartbeat, HEARTBEAT_MS);
-  return { identity, auth, client, stop: () => clearInterval(timer) };
+
+  return {
+    identity,
+    auth,
+    client,
+    ensureKeys,
+    isOnline: () => online === true,
+    stop: () => clearInterval(timer),
+  };
 }

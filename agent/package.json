@@ -1,6 +1,6 @@
 {
   "name": "backup-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Client-side backup agent: watches folders and sends changes to the backup gateway",
   "type": "module",
   "main": "src/index.js",

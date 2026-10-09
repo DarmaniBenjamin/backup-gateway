@@ -3,7 +3,7 @@
 
 import crypto from "node:crypto";
 
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 60_000;
 
 function signedPayload(method, path, timestamp, nonce, body) {
   const bodyHash = crypto.createHash("sha256").update(body).digest("hex");
@@ -20,6 +20,35 @@ async function readJson(res) {
 }
 
 export function createGatewayClient(gatewayUrl) {
+  // Sends any signed request. body must be a Buffer.
+  async function signedRequest(method, path, body, contentType, { deviceId, privateKey }) {
+    const timestamp = String(Date.now());
+    const nonce = crypto.randomBytes(18).toString("base64url");
+    const signature = crypto
+      .sign(null, Buffer.from(signedPayload(method, path, timestamp, nonce, body)), privateKey)
+      .toString("base64");
+
+    const res = await fetch(`${gatewayUrl}${path}`, {
+      method,
+      headers: {
+        "Content-Type": contentType,
+        "X-Device-Id": deviceId,
+        "X-Timestamp": timestamp,
+        "X-Nonce": nonce,
+        "X-Signature": signature,
+      },
+      body,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = await readJson(res);
+    if (!res.ok) {
+      const err = new Error(`Gateway returned ${res.status}: ${data.error || "unknown error"}`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
   return {
     // First contact: trade the one-time code for a device ID
     async enroll({ code, deviceName, publicKeyPem }) {
@@ -34,34 +63,11 @@ export function createGatewayClient(gatewayUrl) {
       return data;
     },
 
-    // Every other request: signed so the gateway knows it's really us
-    async signedPost(path, payload, { deviceId, privateKey }) {
-      const body = Buffer.from(JSON.stringify(payload));
-      const timestamp = String(Date.now());
-      const nonce = crypto.randomBytes(18).toString("base64url");
-      const signature = crypto
-        .sign(null, Buffer.from(signedPayload("POST", path, timestamp, nonce, body)), privateKey)
-        .toString("base64");
+    signedPost: (path, payload, auth) =>
+      signedRequest("POST", path, Buffer.from(JSON.stringify(payload)), "application/json", auth),
 
-      const res = await fetch(`${gatewayUrl}${path}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Device-Id": deviceId,
-          "X-Timestamp": timestamp,
-          "X-Nonce": nonce,
-          "X-Signature": signature,
-        },
-        body,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      const data = await readJson(res);
-      if (!res.ok) {
-        const err = new Error(`Gateway returned ${res.status}: ${data.error || "unknown error"}`);
-        err.status = res.status;
-        throw err;
-      }
-      return data;
-    },
+    signedPostBinary: (path, body, auth) => signedRequest("POST", path, body, "application/octet-stream", auth),
+
+    signedPutBinary: (path, body, auth) => signedRequest("PUT", path, body, "application/octet-stream", auth),
   };
 }

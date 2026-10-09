@@ -1,6 +1,7 @@
 // The agent's local database (SQLite, built into Node).
 // "files"   = what the agent last knew about every file (the source of truth)
 // "changes" = queue of changes waiting to be sent to the gateway
+//             status: pending -> sent (or superseded / skipped)
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -33,6 +34,11 @@ export function openDatabase(dataDir) {
     CREATE INDEX IF NOT EXISTS idx_changes_status ON changes (status);
   `);
 
+  // Upgrade older databases: add columns that didn't exist in earlier versions
+  const changeColumns = db.prepare("PRAGMA table_info(changes)").all().map((c) => c.name);
+  if (!changeColumns.includes("sent_at")) db.exec("ALTER TABLE changes ADD COLUMN sent_at TEXT");
+  if (!changeColumns.includes("version_no")) db.exec("ALTER TABLE changes ADD COLUMN version_no INTEGER");
+
   const q = {
     getFile: db.prepare("SELECT * FROM files WHERE rel_path = ?"),
     upsertFile: db.prepare(`
@@ -51,6 +57,12 @@ export function openDatabase(dataDir) {
       VALUES (?, ?, ?, ?, ?)
     `),
     countPending: db.prepare("SELECT COUNT(*) AS n FROM changes WHERE status = 'pending'"),
+    nextPending: db.prepare("SELECT * FROM changes WHERE status = 'pending' ORDER BY id LIMIT ?"),
+    hasLaterPending: db.prepare(
+      "SELECT 1 FROM changes WHERE status = 'pending' AND rel_path = ? AND id > ? LIMIT 1"
+    ),
+    setStatus: db.prepare("UPDATE changes SET status = ? WHERE id = ?"),
+    markSent: db.prepare("UPDATE changes SET status = 'sent', sent_at = ?, version_no = ? WHERE id = ?"),
   };
 
   return {
@@ -67,6 +79,10 @@ export function openDatabase(dataDir) {
     recordChange: (type, relPath, size, sha256) =>
       q.addChange.run(type, relPath, size ?? null, sha256 ?? null, new Date().toISOString()),
     countPending: () => q.countPending.get().n,
+    nextPending: (limit = 50) => q.nextPending.all(limit),
+    hasLaterPending: (relPath, id) => !!q.hasLaterPending.get(relPath, id),
+    setChangeStatus: (id, status) => q.setStatus.run(status, id),
+    markChangeSent: (id, versionNo) => q.markSent.run(new Date().toISOString(), versionNo ?? null, id),
     transaction: (fn) => {
       db.exec("BEGIN");
       try {
