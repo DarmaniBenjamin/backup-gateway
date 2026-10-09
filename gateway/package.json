@@ -1,0 +1,18 @@
+{
+  "name": "backup-gateway-server",
+  "version": "0.1.0",
+  "description": "Backup gateway: enrolls agents, receives changes, versions, checks and uploads",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "new-code": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/new-code.js",
+    "devices": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/devices.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

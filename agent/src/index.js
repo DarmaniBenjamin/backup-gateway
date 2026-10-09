@@ -1,10 +1,14 @@
 // Backup agent entry point.
 
+import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db.js";
 import { createTracker } from "./tracker.js";
 import { startWatcher } from "./watcher.js";
+import { connectToGateway } from "./connection.js";
 import { log } from "./logger.js";
+
+const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 function formatSize(bytes) {
   if (bytes == null) return "";
@@ -22,7 +26,7 @@ try {
   process.exit(1);
 }
 
-log.info(`Backup agent starting on device "${config.deviceName}"`);
+log.info(`Backup agent v${version} starting on device "${config.deviceName}"`);
 const db = openDatabase(config.dataDir);
 
 const tracker = createTracker(config.watchDir, db, (change) => {
@@ -52,9 +56,23 @@ enqueue(async () => {
   );
 });
 
+// 3) Connect to the gateway (enroll the first time, then heartbeats)
+let connection = null;
+try {
+  connection = await connectToGateway(config, () => ({
+    agentVersion: version,
+    filesTracked: db.countFiles(),
+    pendingChanges: db.countPending(),
+  }));
+} catch (err) {
+  log.error(err.message);
+  log.error("Fix the problem above and restart the agent. Backups are still being tracked locally.");
+}
+
 // Shut down cleanly on Ctrl+C or when the system stops the service
 async function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
+  connection?.stop();
   await watcher.close();
   await queue;
   db.close();

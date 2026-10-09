@@ -30,9 +30,18 @@ export function loadConfig() {
   }
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
+  const gatewayUrl = required("AGENT_GATEWAY_URL").replace(/\/+$/, "");
+  try {
+    new URL(gatewayUrl);
+  } catch {
+    throw new Error(`AGENT_GATEWAY_URL is not a valid URL: ${gatewayUrl}`);
+  }
+
   return {
     watchDir,
     dataDir,
+    gatewayUrl,
+    enrollCode: process.env.AGENT_ENROLL_CODE?.trim() || null,
     deviceName: process.env.AGENT_DEVICE_NAME?.trim() || os.hostname(),
   };
 }
