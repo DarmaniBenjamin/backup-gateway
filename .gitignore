@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Secrets and config with secrets
+.env
+.env.*
+!.env.example
+
+# Keys and certificates — NEVER commit these
+*.pem
+*.key
+*.crt
+*.p12
+certs/
+
+# Runtime data (backups, versions, quarantine, databases)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Test folders
+test-data/
+
+# Logs
+*.log
+logs/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
