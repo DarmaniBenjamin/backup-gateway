@@ -1,13 +1,13 @@
 // Keeps the agent connected to the gateway:
 //   1. enrolls once with a one-time code
 //   2. swaps encryption public keys with the gateway (and pins the gateway's key)
-//   3. sends a heartbeat every 30 seconds
+//   3. sends a heartbeat every 30 seconds, and picks up any jobs (like restores) waiting for it
 // If the gateway or internet is down, the agent keeps working locally and retries.
 
 import crypto from "node:crypto";
 import { loadOrCreateKeys, loadIdentity, saveIdentity } from "./identity.js";
 import { createGatewayClient } from "./gateway-client.js";
-import { deriveKeys } from "./crypto-box.js";
+import { deriveKeys, open } from "./crypto-box.js";
 import { log } from "./logger.js";
 
 const HEARTBEAT_MS = 30_000;
@@ -47,6 +47,7 @@ export async function connectToGateway(config, getStatus) {
   const auth = { deviceId: identity.deviceId, privateKey: keys.signing.privateKey };
   let cryptoKeys = null;
   let online = null;
+  let commandHandler = null;
 
   // Swap X25519 public keys with the gateway once, then derive the encryption keys.
   // The gateway's key is pinned: if it ever changes, the agent refuses to send data.
@@ -71,10 +72,22 @@ export async function connectToGateway(config, getStatus) {
 
   async function heartbeat() {
     try {
-      await client.signedPost("/api/heartbeat", getStatus(), auth);
-      await ensureKeys();
+      const reply = await client.signedPost("/api/heartbeat", getStatus(), auth);
+      const k = await ensureKeys();
       if (online !== true) log.info("Connected to gateway");
       online = true;
+
+      // Jobs arrive encrypted for this device only. Anything that doesn't decrypt is ignored.
+      for (const item of reply.commands || []) {
+        try {
+          const aad = `command:${identity.deviceId}:${item.id}`;
+          const command = JSON.parse(open(k.encKey, Buffer.from(item.sealed, "base64"), aad).toString("utf8"));
+          if (command.id !== item.id) throw new Error("id mismatch");
+          commandHandler?.(command);
+        } catch {
+          log.warn(`Ignored job #${item.id}: failed its integrity check`);
+        }
+      }
     } catch (err) {
       if (err.security) {
         log.error(err.message);
@@ -98,6 +111,10 @@ export async function connectToGateway(config, getStatus) {
     client,
     ensureKeys,
     isOnline: () => online === true,
+    onCommand: (fn) => {
+      commandHandler = fn;
+    },
+    heartbeatNow: heartbeat,
     stop: () => clearInterval(timer),
   };
 }

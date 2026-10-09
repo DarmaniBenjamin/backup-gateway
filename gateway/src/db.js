@@ -3,6 +3,7 @@
 // "devices"          = enrolled agents and their PUBLIC keys (private keys never leave the agent)
 // "chunks"           = which encrypted chunks each device has uploaded
 // "file_versions"    = every version of every file, and which chunks it's made of
+// "commands"         = jobs for agents to carry out (e.g. restores), picked up on their next heartbeat
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,6 +65,20 @@ export function openDatabase(dataDir) {
       UNIQUE (device_id, rel_path, version_no)
     );
     CREATE INDEX IF NOT EXISTS idx_versions_path ON file_versions (device_id, rel_path);
+
+    CREATE TABLE IF NOT EXISTS commands (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id   TEXT NOT NULL REFERENCES devices(id),
+      type        TEXT NOT NULL,
+      payload     TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'queued'
+                  CHECK (status IN ('queued', 'running', 'done', 'failed', 'cancelled')),
+      created_at  TEXT NOT NULL,
+      started_at  TEXT,
+      finished_at TEXT,
+      result      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_commands_device ON commands (device_id, status);
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
@@ -112,6 +127,29 @@ export function openDatabase(dataDir) {
       SELECT v.*, d.device_name, d.client_name FROM file_versions v
       JOIN devices d ON d.id = v.device_id
       ORDER BY d.client_name, d.device_name, v.rel_path, v.version_no
+    `),
+    versionsUnder: db.prepare(`
+      SELECT * FROM file_versions
+      WHERE device_id = ? AND (? = '' OR rel_path = ? OR rel_path LIKE ? ESCAPE '\\')
+      ORDER BY rel_path, version_no
+    `),
+    addCommand: db.prepare(
+      "INSERT INTO commands (device_id, type, payload, created_at) VALUES (?, ?, ?, ?)"
+    ),
+    getCommand: db.prepare("SELECT * FROM commands WHERE id = ?"),
+    activeCommands: db.prepare(
+      "SELECT * FROM commands WHERE device_id = ? AND status IN ('queued', 'running') ORDER BY id"
+    ),
+    startCommand: db.prepare(
+      "UPDATE commands SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND status IN ('queued', 'running')"
+    ),
+    finishCommand: db.prepare(
+      "UPDATE commands SET status = ?, finished_at = ?, result = ? WHERE id = ? AND status IN ('queued', 'running')"
+    ),
+    listCommands: db.prepare(`
+      SELECT c.*, d.device_name, d.client_name FROM commands c
+      JOIN devices d ON d.id = c.device_id
+      ORDER BY c.id DESC LIMIT ?
     `),
     storageStats: db.prepare(`
       SELECT device_id, COUNT(*) AS chunks, SUM(plain_size) AS plain, SUM(box_size) AS stored
@@ -172,6 +210,20 @@ export function openDatabase(dataDir) {
     },
     listVersions: () => q.listVersions.all(),
     storageStats: () => q.storageStats.all(),
+
+    // All versions of one file, or of every file inside a folder ("" = everything)
+    versionsUnder: (deviceId, relPath) => {
+      const escaped = relPath.replace(/[\\%_]/g, (c) => "\\" + c);
+      return q.versionsUnder.all(deviceId, relPath, relPath, `${escaped}/%`);
+    },
+
+    addCommand: (deviceId, type, payload) =>
+      Number(q.addCommand.run(deviceId, type, JSON.stringify(payload), now()).lastInsertRowid),
+    getCommand: (id) => q.getCommand.get(id),
+    activeCommands: (deviceId) => q.activeCommands.all(deviceId),
+    startCommand: (id) => q.startCommand.run(now(), id),
+    finishCommand: (id, status, result) => q.finishCommand.run(status, now(), JSON.stringify(result ?? null), id),
+    listCommands: (limit = 20) => q.listCommands.all(limit),
 
     close: () => db.close(),
   };

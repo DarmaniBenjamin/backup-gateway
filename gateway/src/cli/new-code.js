@@ -3,7 +3,7 @@
 
 import { loadConfig } from "../config.js";
 import { openDatabase } from "../db.js";
-import { generateCode, hashCode } from "../codes.js";
+import { createEnrollmentCode } from "../codes.js";
 
 const clientName = process.argv.slice(2).join(" ").trim();
 if (!clientName) {
@@ -13,10 +13,7 @@ if (!clientName) {
 
 const config = loadConfig();
 const db = openDatabase(config.dataDir);
-
-const code = generateCode();
-const expiresAt = new Date(Date.now() + config.codeTtlMinutes * 60 * 1000);
-db.addCode(hashCode(code), clientName, expiresAt.toISOString());
+const { code, expiresAt } = createEnrollmentCode(db, clientName, config.codeTtlMinutes);
 db.close();
 
 console.log(`\nEnrollment code for "${clientName}":\n`);

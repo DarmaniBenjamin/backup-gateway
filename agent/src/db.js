@@ -2,6 +2,7 @@
 // "files"   = what the agent last knew about every file (the source of truth)
 // "changes" = queue of changes waiting to be sent to the gateway
 //             status: pending -> sent (or superseded / skipped)
+// "jobs_done" = jobs from the gateway (like restores) already carried out, so none ever runs twice
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,6 +33,12 @@ export function openDatabase(dataDir) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_changes_status ON changes (status);
+
+    CREATE TABLE IF NOT EXISTS jobs_done (
+      id          INTEGER PRIMARY KEY,
+      result      TEXT NOT NULL,
+      finished_at TEXT NOT NULL
+    );
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
@@ -62,6 +69,8 @@ export function openDatabase(dataDir) {
       "SELECT 1 FROM changes WHERE status = 'pending' AND rel_path = ? AND id > ? LIMIT 1"
     ),
     setStatus: db.prepare("UPDATE changes SET status = ? WHERE id = ?"),
+    getJobDone: db.prepare("SELECT * FROM jobs_done WHERE id = ?"),
+    addJobDone: db.prepare("INSERT OR REPLACE INTO jobs_done (id, result, finished_at) VALUES (?, ?, ?)"),
     markSent: db.prepare("UPDATE changes SET status = 'sent', sent_at = ?, version_no = ? WHERE id = ?"),
   };
 
@@ -82,6 +91,11 @@ export function openDatabase(dataDir) {
     nextPending: (limit = 50) => q.nextPending.all(limit),
     hasLaterPending: (relPath, id) => !!q.hasLaterPending.get(relPath, id),
     setChangeStatus: (id, status) => q.setStatus.run(status, id),
+    getJobDone: (id) => {
+      const row = q.getJobDone.get(id);
+      return row ? JSON.parse(row.result) : null;
+    },
+    saveJobDone: (id, result) => q.addJobDone.run(id, JSON.stringify(result), new Date().toISOString()),
     markChangeSent: (id, versionNo) => q.markSent.run(new Date().toISOString(), versionNo ?? null, id),
     transaction: (fn) => {
       db.exec("BEGIN");

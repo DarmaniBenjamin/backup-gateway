@@ -5,12 +5,15 @@
 //   POST /api/chunks/check    (signed) which of these chunks do you still need?
 //   PUT  /api/chunks/:id      (signed) upload one encrypted chunk
 //   POST /api/files/commit    (signed, encrypted) "this file version is made of these chunks"
+//   GET  /api/restore/:job/manifest          (signed) encrypted list of files to restore
+//   GET  /api/restore/:job/chunks/:chunkId   (signed) one chunk, re-encrypted for the restoring device
+//   POST /api/commands/result                (signed) agent reports how a job went
 
 import http from "node:http";
 import crypto from "node:crypto";
 import { hashCode } from "./codes.js";
 import { verifyRequest, AuthError } from "./auth.js";
-import { CHUNK_SIZE, chunkId as makeChunkId, open } from "./crypto-box.js";
+import { CHUNK_SIZE, chunkId as makeChunkId, open, seal } from "./crypto-box.js";
 import { log } from "./logger.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
@@ -60,6 +63,15 @@ function readBody(req, limit) {
   });
 }
 
+function sendBinary(res, status, buffer) {
+  res.writeHead(status, {
+    "Content-Type": "application/octet-stream",
+    "Content-Length": buffer.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(buffer);
+}
+
 function send(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -94,6 +106,8 @@ function isSafeRelPath(p) {
 }
 
 export function createServer({ db, keys, storage }) {
+  const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
+
   // Keys for a device, or an error if it hasn't done the key exchange
   function deviceKeys(device) {
     const k = keys.forDevice(device);
@@ -147,7 +161,87 @@ export function createServer({ db, keys, storage }) {
       pendingChanges: Number.isInteger(info.pendingChanges) ? info.pendingChanges : null,
     });
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
-    return send(res, 200, { ok: true, serverTime: Date.now() });
+
+    // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
+    // between (a relay, a proxy) can read, change or inject commands.
+    const k = keys.forDevice(device);
+    const commands = k
+      ? db.activeCommands(device.id).map((c) => {
+          const p = JSON.parse(c.payload);
+          const summary = { id: c.id, type: c.type, mode: p.mode, label: p.label, fileCount: p.files.length };
+          const sealed = seal(k.encKey, Buffer.from(JSON.stringify(summary)), `command:${device.id}:${c.id}`);
+          return { id: c.id, sealed: sealed.toString("base64") };
+        })
+      : [];
+    return send(res, 200, { ok: true, serverTime: Date.now(), commands });
+  }
+
+  // A restore job that belongs to this device and isn't finished yet
+  function getActiveJob(device, jobId) {
+    const job = db.getCommand(jobId);
+    if (!job || job.device_id !== device.id || job.type !== "restore") throw new HttpError(404, "Job not found");
+    if (!["queued", "running"].includes(job.status)) throw new HttpError(409, `Job is ${job.status}`);
+    return { job, payload: JSON.parse(job.payload) };
+  }
+
+  function handleRestoreManifest(res, device, jobId) {
+    const { job, payload } = getActiveJob(device, jobId);
+    const { encKey } = deviceKeys(device);
+    db.startCommand(job.id);
+    const manifest = {
+      jobId: job.id,
+      mode: payload.mode,
+      label: payload.label,
+      files: payload.files.map((f) => ({ relPath: f.relPath, size: f.size, sha256: f.sha256, chunkIds: f.chunkIds })),
+    };
+    log.info(`Restore job #${job.id} started by ${device.device_name} (${manifest.files.length} file(s))`);
+    return sendBinary(res, 200, seal(encKey, Buffer.from(JSON.stringify(manifest)), `restore:${job.id}:manifest`));
+  }
+
+  function handleRestoreChunk(res, device, jobId, chunkIdParam) {
+    const { job, payload } = getActiveJob(device, jobId);
+
+    // Only chunks that are part of this job can be downloaded
+    if (!jobChunkCache.has(job.id)) {
+      jobChunkCache.set(job.id, new Set(payload.files.flatMap((f) => f.chunkIds)));
+    }
+    if (!jobChunkCache.get(job.id).has(chunkIdParam)) throw new HttpError(403, "Chunk is not part of this job");
+
+    // Chunks are stored encrypted for the device that backed them up. Decrypt with that
+    // device's keys, check it, then re-encrypt for the device doing the restore.
+    // This is what lets a brand-new device restore a dead device's files.
+    const source = db.getDevice(payload.sourceDeviceId);
+    const sourceKeys = source && keys.forDevice(source);
+    if (!sourceKeys) throw new HttpError(500, "Source device keys unavailable");
+
+    let plaintext;
+    try {
+      plaintext = open(sourceKeys.encKey, storage.readChunk(source.id, chunkIdParam), `chunk:${chunkIdParam}`);
+      if (makeChunkId(sourceKeys.idKey, plaintext) !== chunkIdParam) throw new Error("mismatch");
+    } catch {
+      log.error(`Restore job #${job.id}: stored chunk ${chunkIdParam.slice(0, 12)}… is damaged or missing`);
+      throw new HttpError(500, "Stored chunk is damaged or missing");
+    }
+
+    const { encKey } = deviceKeys(device);
+    return sendBinary(res, 200, seal(encKey, plaintext, `restore:${job.id}:${chunkIdParam}`));
+  }
+
+  function handleCommandResult(res, device, body) {
+    const { commandId, ok, restored, failed, errors } = parseJson(body);
+    const job = db.getCommand(commandId);
+    if (!job || job.device_id !== device.id) throw new HttpError(404, "Job not found");
+    const result = {
+      restored: Number.isInteger(restored) ? restored : 0,
+      failed: Number.isInteger(failed) ? failed : 0,
+      errors: Array.isArray(errors) ? errors.slice(0, 20).map((e) => String(e).slice(0, 300)) : [],
+    };
+    db.finishCommand(job.id, ok ? "done" : "failed", result);
+    jobChunkCache.delete(job.id);
+    const line = `Restore job #${job.id} on ${device.device_name}: ${ok ? "done" : "FAILED"} — ${result.restored} restored, ${result.failed} failed`;
+    if (ok) log.info(line);
+    else log.warn(line);
+    return send(res, 200, { ok: true });
   }
 
   function handleKeyExchange(res, device, body) {
@@ -276,12 +370,17 @@ export function createServer({ db, keys, storage }) {
       }
 
       // Everything below requires a signed request from an enrolled device
-      let route, limit, chunkIdParam;
+      let route, limit, chunkIdParam, jobIdParam, match;
       if (req.method === "POST" && url === "/api/heartbeat") [route, limit] = ["heartbeat", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/key-exchange") [route, limit] = ["kx", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/chunks/check") [route, limit] = ["check", LIMIT_SMALL * 2];
       else if (req.method === "POST" && url === "/api/files/commit") [route, limit] = ["commit", LIMIT_COMMIT];
-      else if (req.method === "PUT" && url.startsWith("/api/chunks/")) {
+      else if (req.method === "POST" && url === "/api/commands/result") [route, limit] = ["result", LIMIT_SMALL];
+      else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/manifest$/))) {
+        [route, limit, jobIdParam] = ["manifest", 0, Number(match[1])];
+      } else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/chunks\/([a-f0-9]{64})$/))) {
+        [route, limit, jobIdParam, chunkIdParam] = ["restore-chunk", 0, Number(match[1]), match[2]];
+      } else if (req.method === "PUT" && url.startsWith("/api/chunks/")) {
         chunkIdParam = url.slice("/api/chunks/".length);
         if (!CHUNK_ID_RE.test(chunkIdParam)) return send(res, 400, { error: "Bad chunk ID" });
         [route, limit] = ["put", LIMIT_CHUNK];
@@ -298,6 +397,9 @@ export function createServer({ db, keys, storage }) {
         case "check": return handleCheckChunks(res, device, body);
         case "put": return handlePutChunk(res, device, body, chunkIdParam);
         case "commit": return handleCommit(res, device, body);
+        case "result": return handleCommandResult(res, device, body);
+        case "manifest": return handleRestoreManifest(res, device, jobIdParam);
+        case "restore-chunk": return handleRestoreChunk(res, device, jobIdParam, chunkIdParam);
       }
     } catch (err) {
       if (err instanceof AuthError) {

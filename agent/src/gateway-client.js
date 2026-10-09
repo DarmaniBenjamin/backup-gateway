@@ -37,9 +37,13 @@ export function createGatewayClient(gatewayUrl) {
         "X-Nonce": nonce,
         "X-Signature": signature,
       },
-      body,
+      body: method === "GET" ? undefined : body,
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    // Binary answers (restore data) come back as a Buffer, everything else as JSON
+    if (res.ok && res.headers.get("content-type") === "application/octet-stream") {
+      return Buffer.from(await res.arrayBuffer());
+    }
     const data = await readJson(res);
     if (!res.ok) {
       const err = new Error(`Gateway returned ${res.status}: ${data.error || "unknown error"}`);
@@ -69,5 +73,7 @@ export function createGatewayClient(gatewayUrl) {
     signedPostBinary: (path, body, auth) => signedRequest("POST", path, body, "application/octet-stream", auth),
 
     signedPutBinary: (path, body, auth) => signedRequest("PUT", path, body, "application/octet-stream", auth),
+
+    signedGet: (path, auth) => signedRequest("GET", path, Buffer.alloc(0), "application/octet-stream", auth),
   };
 }

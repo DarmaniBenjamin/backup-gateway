@@ -7,6 +7,7 @@ import { createTracker } from "./tracker.js";
 import { startWatcher } from "./watcher.js";
 import { connectToGateway } from "./connection.js";
 import { createUploader } from "./uploader.js";
+import { createRestorer } from "./restorer.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -74,10 +75,13 @@ try {
   log.error("Fix the problem above and restart the agent. Backups are still being tracked locally.");
 }
 
-// 4) Start sending queued changes
+// 4) Start sending queued changes, and carry out restore jobs from the gateway
 if (connection) {
   uploader = createUploader({ db, tracker, connection });
   uploader.trigger();
+  const restorer = createRestorer({ config, db, connection });
+  connection.onCommand((command) => restorer.handle(command));
+  connection.heartbeatNow(); // check for waiting jobs right away instead of in 30 seconds
 }
 
 // Shut down cleanly on Ctrl+C or when the system stops the service
