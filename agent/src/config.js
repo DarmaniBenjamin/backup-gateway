@@ -22,8 +22,17 @@ export function loadConfig() {
     throw new Error(`Watch path is not a folder: ${watchDir}`);
   }
 
+  // Where the agent keeps its own database. Must NOT be inside the watched folder.
+  const dataDir = path.resolve(process.env.AGENT_DATA_DIR?.trim() || "./data");
+  const relative = path.relative(watchDir, dataDir);
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+    throw new Error("AGENT_DATA_DIR must not be inside AGENT_WATCH_DIR.");
+  }
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+
   return {
     watchDir,
+    dataDir,
     deviceName: process.env.AGENT_DEVICE_NAME?.trim() || os.hostname(),
   };
 }

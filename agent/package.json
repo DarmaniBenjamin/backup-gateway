@@ -1,15 +1,15 @@
 {
   "name": "backup-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Client-side backup agent: watches folders and sends changes to the backup gateway",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/index.js",
-    "dev": "node --watch --env-file-if-exists=.env src/index.js"
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "license": "UNLICENSED",
   "private": true,
