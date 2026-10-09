@@ -1,0 +1,49 @@
+/* Fonts are bundled with the app (no outside requests — the gateway's security policy blocks them) */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "tailwindcss";
+
+/* Design tokens: night-blue surfaces, amber for actions (like a drive activity light),
+   teal = healthy, coral = needs attention. Colour always means something. */
+@theme {
+  --color-night: #0e1726;     /* page background */
+  --color-surface: #152036;   /* sidebar, panels */
+  --color-raised: #1c2a45;    /* inputs, hover */
+  --color-edge: #263654;      /* borders */
+  --color-fg: #e4eaf4;        /* main text */
+  --color-dim: #8b9ab6;       /* secondary text */
+  --color-signal: #f2a93b;    /* primary actions, focus */
+  --color-signal-ink: #2a1a02;/* text on amber */
+  --color-good: #3cc6b4;
+  --color-alert: #f0616d;
+
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-night text-fg font-sans antialiased;
+  }
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}
