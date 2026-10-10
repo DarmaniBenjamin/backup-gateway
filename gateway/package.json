@@ -1,6 +1,6 @@
 {
   "name": "backup-gateway-server",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Backup gateway: enrolls agents, receives changes, versions, checks and uploads",
   "type": "module",
   "main": "src/index.js",

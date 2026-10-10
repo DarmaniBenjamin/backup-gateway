@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
-export default function Modal({ title, onClose, children, footer }) {
+export default function Modal({ title, onClose, children, footer, wide = false }) {
   const boxRef = useRef(null);
 
   useEffect(() => {
@@ -46,7 +46,7 @@ export default function Modal({ title, onClose, children, footer }) {
         aria-modal="true"
         aria-labelledby="modal-title"
         onMouseDown={(e) => e.stopPropagation()}
-        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col rounded-lg border border-edge bg-surface shadow-2xl"
+        className={`flex max-h-[calc(100dvh-2rem)] w-full ${wide ? "max-w-2xl" : "max-w-md"} flex-col rounded-lg border border-edge bg-surface shadow-2xl`}
       >
         <div className="flex items-center justify-between border-b border-edge px-5 py-4">
           <h2 id="modal-title" className="font-semibold">

@@ -6,6 +6,7 @@ import Layout from "./components/Layout.jsx";
 import Login from "./pages/Login.jsx";
 import Overview from "./pages/Overview.jsx";
 import Devices from "./pages/Devices.jsx";
+import DeviceFolders from "./pages/DeviceFolders.jsx";
 import Restore from "./pages/Restore.jsx";
 import Quarantine from "./pages/Quarantine.jsx";
 import Jobs from "./pages/Jobs.jsx";
@@ -33,6 +34,7 @@ export default function App() {
       >
         <Route index element={<Overview />} />
         <Route path="devices" element={<Devices />} />
+        <Route path="devices/:id" element={<DeviceFolders />} />
         <Route path="restore" element={<Restore />} />
         <Route path="quarantine" element={<Quarantine />} />
         <Route path="jobs" element={<Jobs />} />

@@ -37,6 +37,7 @@ export function createUploader({ db, tracker, connection }) {
 
   async function uploadFile(change, keys) {
     const absPath = tracker.toAbs(change.rel_path);
+    if (!absPath) return { skipped: "its folder is no longer backed up" };
 
     let stats;
     try {

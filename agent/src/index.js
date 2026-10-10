@@ -8,6 +8,7 @@ import { startWatcher } from "./watcher.js";
 import { connectToGateway } from "./connection.js";
 import { createUploader } from "./uploader.js";
 import { createRestorer } from "./restorer.js";
+import { createFolderManager } from "./folders.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -33,7 +34,7 @@ const db = openDatabase(config.dataDir);
 
 let uploader = null;
 
-const tracker = createTracker(config.watchDir, db, (change) => {
+const tracker = createTracker(db, (change) => {
   const size = change.size != null ? ` (${formatSize(change.size)})` : "";
   const hash = change.sha256 ? `  sha256:${change.sha256.slice(0, 12)}…` : "";
   log.info(`${change.type.padEnd(8)} ${change.relPath}${size}${hash}`);
@@ -47,41 +48,47 @@ function enqueue(task) {
   return queue;
 }
 
-// 1) Start watching first so nothing is missed during the scan
-const watcher = startWatcher(config.watchDir, (absPath) => enqueue(() => tracker.inspect(absPath)));
-
-// 2) Full scan: compare everything on disk with the database
-enqueue(async () => {
-  log.info("Scanning for changes made while the agent was off...");
-  const started = Date.now();
-  await tracker.fullScan();
-  log.info(
-    `Scan done in ${((Date.now() - started) / 1000).toFixed(1)}s — ` +
-      `${db.countFiles()} files tracked, ${db.countPending()} changes waiting to send`
-  );
+// 1) Watch the backup folders, and scan each one fully (catches changes made while the agent
+//    was off). The folders saved locally are used, so this works even without the gateway.
+const watcher = startWatcher(tracker.isExcluded, (absPath) => enqueue(() => tracker.inspect(absPath)));
+const folders = createFolderManager({ config, db, tracker, watcher, enqueue });
+log.info(`Allowed areas on this device: ${config.allowedPaths.join(", ")}`);
+await folders.init();
+enqueue(() => {
+  log.info(`${db.countFiles()} files tracked, ${db.countPending()} changes waiting to send`);
   uploader?.trigger();
 });
 
-// 3) Connect to the gateway (enroll the first time, then heartbeats)
+// 2) Connect to the gateway (enroll the first time, then heartbeats)
 let connection = null;
 try {
   connection = await connectToGateway(config, () => ({
     agentVersion: version,
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
+    folders: folders.report(),
   }));
 } catch (err) {
   log.error(err.message);
   log.error("Fix the problem above and restart the agent. Backups are still being tracked locally.");
 }
 
-// 4) Start sending queued changes, and carry out restore jobs from the gateway
+// 3) Get the folder list from the gateway, then start sending changes and carrying out jobs.
+//    Sending waits for the first folder sync, so the gateway always knows the folders first.
 if (connection) {
-  uploader = createUploader({ db, tracker, connection });
-  uploader.trigger();
-  const restorer = createRestorer({ config, db, connection });
+  folders.attach(connection);
+  connection.onFoldersVersion((v) => folders.checkVersion(v));
+  connection.onBrowse((request) => folders.answerBrowse(request));
+  folders.whenSynced(() => {
+    uploader = createUploader({ db, tracker, connection });
+    uploader.trigger();
+  });
+  await folders.sync();
+
+  const restorer = createRestorer({ db, connection, tracker });
   connection.onCommand((command) => restorer.handle(command));
   connection.heartbeatNow(); // check for waiting jobs right away instead of in 30 seconds
+  connection.startLiveLink();
 }
 
 // Shut down cleanly on Ctrl+C or when the system stops the service

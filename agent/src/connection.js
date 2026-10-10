@@ -2,6 +2,9 @@
 //   1. enrolls once with a one-time code
 //   2. swaps encryption public keys with the gateway (and pins the gateway's key)
 //   3. sends a heartbeat every 30 seconds, and picks up any jobs (like restores) waiting for it
+//   4. keeps a "live link" open: one request the gateway answers the moment there's work
+//      (a restore, a folder change, a folder-browse request), so nothing waits for the heartbeat.
+//      It's still an outgoing connection, so no ports are opened on this device.
 // If the gateway or internet is down, the agent keeps working locally and retries.
 
 import crypto from "node:crypto";
@@ -11,6 +14,7 @@ import { deriveKeys, open } from "./crypto-box.js";
 import { log } from "./logger.js";
 
 const HEARTBEAT_MS = 30_000;
+const LIVE_RETRY_MS = 10_000;
 
 export async function connectToGateway(config, getStatus) {
   const client = createGatewayClient(config.gatewayUrl);
@@ -48,6 +52,9 @@ export async function connectToGateway(config, getStatus) {
   let cryptoKeys = null;
   let online = null;
   let commandHandler = null;
+  let foldersHandler = null;
+  let browseHandler = null;
+  let stopped = false;
 
   // Swap X25519 public keys with the gateway once, then derive the encryption keys.
   // The gateway's key is pinned: if it ever changes, the agent refuses to send data.
@@ -88,6 +95,20 @@ export async function connectToGateway(config, getStatus) {
           log.warn(`Ignored job #${item.id}: failed its integrity check`);
         }
       }
+
+      // Folder-browse requests from the web UI, encrypted the same way
+      for (const item of reply.browse || []) {
+        try {
+          const aad = `browse:${identity.deviceId}:${item.id}`;
+          const request = JSON.parse(open(k.encKey, Buffer.from(item.sealed, "base64"), aad).toString("utf8"));
+          if (request.id !== item.id) throw new Error("id mismatch");
+          browseHandler?.(request);
+        } catch {
+          log.warn("Ignored a folder-browse request: failed its integrity check");
+        }
+      }
+
+      if (Number.isInteger(reply.foldersVersion)) foldersHandler?.(reply.foldersVersion);
     } catch (err) {
       if (err.security) {
         log.error(err.message);
@@ -105,6 +126,22 @@ export async function connectToGateway(config, getStatus) {
   await heartbeat();
   const timer = setInterval(heartbeat, HEARTBEAT_MS);
 
+  // Live link: wait for the gateway to say "there's work", then fetch it with a heartbeat
+  async function liveLink() {
+    while (!stopped) {
+      try {
+        const reply = await client.signedGet("/api/wait", auth);
+        if (reply.work) await heartbeat();
+      } catch (err) {
+        if (err.status === 404) {
+          log.warn("This gateway doesn't support the live link yet; jobs arrive with the heartbeat instead.");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, LIVE_RETRY_MS));
+      }
+    }
+  }
+
   return {
     identity,
     auth,
@@ -114,7 +151,17 @@ export async function connectToGateway(config, getStatus) {
     onCommand: (fn) => {
       commandHandler = fn;
     },
+    onFoldersVersion: (fn) => {
+      foldersHandler = fn;
+    },
+    onBrowse: (fn) => {
+      browseHandler = fn;
+    },
     heartbeatNow: heartbeat,
-    stop: () => clearInterval(timer),
+    startLiveLink: () => liveLink(),
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
   };
 }

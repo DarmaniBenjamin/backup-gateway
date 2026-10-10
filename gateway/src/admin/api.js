@@ -21,12 +21,20 @@
 //   POST /admin/api/devices/:id/unfreeze       resume normal backups for a frozen device
 //   GET  /admin/api/alerts
 //   POST /admin/api/alerts/:id/ack
+//   GET  /admin/api/devices/:id/folders                     backup folders + the device's allowed areas
+//   POST /admin/api/devices/:id/browse                      { path } list folders on the device (live)
+//   POST /admin/api/devices/:id/folders                     { path, excludes } start backing up a folder
+//   POST /admin/api/devices/:id/folders/:folderId/excludes  { excludes }
+//   POST /admin/api/devices/:id/folders/:folderId/remove    stop backing it up (backups are kept)
 
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
 import { runVerify } from "../verify.js";
 import { verifyPassword, burnTime } from "./passwords.js";
 import { REASON_TEXT } from "../inspect.js";
+import {
+  MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
+} from "../folders.js";
 import { log } from "../logger.js";
 
 const ONLINE_WINDOW_MS = 90_000; // seen within 90 s (3 missed heartbeats) = online
@@ -58,7 +66,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config }) {
+export function createAdminApi({ db, store, keys, storage, config, broker }) {
   function publicDevice(d, stats) {
     const s = stats?.find((x) => x.device_id === d.id);
     const storageRow = db.storageStats().find((x) => x.device_id === d.id);
@@ -74,6 +82,9 @@ export function createAdminApi({ db, store, keys, storage, config }) {
       filesTracked: d.files_tracked,
       pendingChanges: d.pending_changes,
       encryptionReady: !!d.kx_public_key,
+      platform: d.platform,
+      multiFolder: (d.path_layout ?? 1) >= 2,
+      live: broker.isLive(d.id),
       frozenAt: d.frozen_at,
       frozenReason: d.frozen_reason,
       online: !!d.last_seen_at && Date.now() - new Date(d.last_seen_at) < ONLINE_WINDOW_MS,
@@ -305,6 +316,7 @@ export function createAdminApi({ db, store, keys, storage, config }) {
           jobId: plan.jobId, label: plan.label, mode: plan.mode, target: plan.target.name, files: plan.fileCount,
         }, ip);
         log.info(`Admin "${admin.username}" created restore job #${plan.jobId}: ${plan.label} → ${plan.target.name}`);
+        broker.wake(plan.target.id); // start right away instead of at the next heartbeat
         return { jobId: plan.jobId, label: plan.label, fileCount: plan.fileCount, totalSize: plan.totalSize };
       } catch (err) {
         if (err instanceof RestoreError) throw new ApiError(400, err.message);
@@ -384,6 +396,142 @@ export function createAdminApi({ db, store, keys, storage, config }) {
       return { ok: true };
     },
   };
+
+  function publicFolder(f) {
+    return {
+      id: f.id,
+      name: f.name,
+      path: f.path,
+      excludes: JSON.parse(f.excludes),
+      status: f.status,
+      // What the device last said about it: ok / missing / denied, or null = not reported yet
+      state: f.reported_at && f.reported_at >= f.added_at ? f.state : null,
+      error: f.error,
+      files: f.files,
+      bytes: f.bytes,
+      reportedAt: f.reported_at,
+      addedAt: f.added_at,
+      addedBy: f.added_by,
+      removedAt: f.removed_at,
+      removedBy: f.removed_by,
+    };
+  }
+
+  function requireMultiFolder(device) {
+    if ((device.path_layout ?? 1) < 2) {
+      throw new ApiError(409, "This device's agent is too old to manage folders. Update it to version 0.7 or newer.");
+    }
+  }
+
+  function foldersChanged(device, admin, ip, action, details) {
+    db.bumpFoldersVersion(device.id);
+    broker.wake(device.id);
+    store.audit(admin.username, action, { device: device.device_name, ...details }, ip);
+  }
+
+  Object.assign(routes, {
+    "GET /devices/:id/folders"({ params }) {
+      const d = getDeviceOr404(params.id);
+      return {
+        device: { id: d.id, name: d.device_name, client: d.client_name, status: deviceStatus(d), live: broker.isLive(d.id) },
+        multiFolder: (d.path_layout ?? 1) >= 2,
+        platform: d.platform,
+        allowedPaths: d.allowed_paths ? JSON.parse(d.allowed_paths) : [],
+        folders: db.listFolders(d.id).map(publicFolder),
+      };
+    },
+
+    // Live folder browser: the agent lists the sub-folders of `path` (names only, no files).
+    // Empty path = the device's allowed areas. The agent refuses anything outside them.
+    async "POST /devices/:id/browse"({ params, body }) {
+      const d = getDeviceOr404(params.id);
+      requireMultiFolder(d);
+      if (!broker.isLive(d.id)) throw new ApiError(409, "This device isn't connected right now, so its folders can't be browsed.");
+      const path = String(body.path ?? "");
+      if (path && !isValidDevicePath(path)) throw new ApiError(400, "Bad path");
+      const result = await broker.requestBrowse(d.id, path);
+      if (result.error) throw new ApiError(400, result.error);
+      const { id, ...listing } = result;
+      return listing;
+    },
+
+    "POST /devices/:id/folders"({ params, body, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      requireMultiFolder(d);
+      const path = String(body.path ?? "").trim();
+      if (!isValidDevicePath(path)) throw new ApiError(400, "Pick a folder on the device.");
+      let excludes;
+      try {
+        excludes = cleanExcludes(body.excludes);
+      } catch (err) {
+        throw new ApiError(400, err.message);
+      }
+
+      // The device enforces its allowed areas itself; checking here too gives a clear message up front
+      const allowed = d.allowed_paths ? JSON.parse(d.allowed_paths) : [];
+      if (allowed.length && !allowed.some((a) => isInsidePath(path, a, d.platform))) {
+        throw new ApiError(400, "That folder is outside the allowed areas set on this device.");
+      }
+
+      const all = db.listFolders(d.id);
+      const active = all.filter((f) => f.status === "active");
+      const clash = active.find((f) => foldersOverlap(f.path, path, d.platform));
+      if (clash) {
+        throw new ApiError(400, samePath(clash.path, path, d.platform)
+          ? `This folder is already backed up as "${clash.name}".`
+          : `This folder overlaps "${clash.name}" (${clash.path}). A file can only be in one backup folder.`);
+      }
+      if (active.length >= MAX_FOLDERS) throw new ApiError(400, `A device can have at most ${MAX_FOLDERS} backup folders.`);
+
+      // Added back after being removed: same name, so its history continues
+      const previous = all.find((f) => f.status === "removed" && samePath(f.path, path, d.platform));
+      if (previous) {
+        db.reactivateFolder(previous.id, { excludes, by: admin.username });
+        foldersChanged(d, admin, ip, "folder.added", { name: previous.name, path, readded: true });
+        log.info(`Admin "${admin.username}" added back folder "${previous.name}" on ${d.device_name}`);
+        return publicFolder(db.getFolder(previous.id));
+      }
+
+      // Names must be unique per device (they're the top level of every backed-up path)
+      const base = folderNameFromPath(path);
+      const taken = new Set(all.map((f) => f.name.toLowerCase()));
+      let name = base;
+      for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} ${n}`;
+
+      const id = newFolderId();
+      db.addFolder(d.id, { id, name, path, excludes, by: admin.username });
+      foldersChanged(d, admin, ip, "folder.added", { name, path });
+      log.info(`Admin "${admin.username}" added backup folder "${name}" (${path}) on ${d.device_name}`);
+      return publicFolder(db.getFolder(id));
+    },
+
+    "POST /devices/:id/folders/:folderId/excludes"({ params, body, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      const f = db.getFolder(params.folderId);
+      if (!f || f.device_id !== d.id || f.status !== "active") throw new ApiError(404, "Folder not found");
+      let excludes;
+      try {
+        excludes = cleanExcludes(body.excludes);
+      } catch (err) {
+        throw new ApiError(400, err.message);
+      }
+      db.setFolderExcludes(f.id, excludes);
+      foldersChanged(d, admin, ip, "folder.excludes-changed", { name: f.name, excludes });
+      return publicFolder(db.getFolder(f.id));
+    },
+
+    // Stops backing the folder up. Its backups are KEPT: still browsable and restorable,
+    // and it can be added back later with its history intact.
+    "POST /devices/:id/folders/:folderId/remove"({ params, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      const f = db.getFolder(params.folderId);
+      if (!f || f.device_id !== d.id) throw new ApiError(404, "Folder not found");
+      if (!db.removeFolder(f.id, admin.username)) throw new ApiError(400, "This folder was already removed.");
+      foldersChanged(d, admin, ip, "folder.removed", { name: f.name, path: f.path });
+      log.info(`Admin "${admin.username}" removed backup folder "${f.name}" on ${d.device_name} (backups kept)`);
+      return { ok: true };
+    },
+  });
 
   // Release (status "ok") or reject quarantined versions
   function review(body, status, admin, ip) {

@@ -28,7 +28,7 @@ function DeviceRow({ d }) {
     <li className="grid gap-4 px-5 py-4 md:grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))] md:items-center">
       <div className="flex items-start justify-between gap-3 md:block">
         <div className="min-w-0">
-          <Link to={`/restore?device=${d.id}`} className="block truncate font-medium hover:text-signal" title="Browse and restore files">
+          <Link to={`/devices/${d.id}`} className="block truncate font-medium hover:text-signal" title="Backup folders">
             {d.name}
           </Link>
           <p className="truncate font-mono text-xs text-dim" title="Device ID">

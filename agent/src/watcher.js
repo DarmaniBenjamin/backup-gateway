@@ -1,14 +1,15 @@
-// Watches a folder and reports paths that may have changed.
+// Watches the backup folders and reports paths that may have changed.
 // It does NOT decide what changed — the tracker checks the disk and database for that.
+// Folders can be added and removed while running (when they're changed in the web UI).
 
 import chokidar from "chokidar";
-import { isIgnored } from "./ignore.js";
 import { log } from "./logger.js";
 
-export function startWatcher(rootDir, onHint) {
-  const watcher = chokidar.watch(rootDir, {
-    ignored: (p) => isIgnored(p),
-    ignoreInitial: true,        // the startup full scan handles existing files
+export function startWatcher(isExcluded, onHint) {
+  const watched = new Set();
+  const watcher = chokidar.watch([], {
+    ignored: (p) => isExcluded(p),
+    ignoreInitial: true,        // the full scan handles existing files
     persistent: true,
     followSymlinks: false,      // never follow links out of the backup folder
     awaitWriteFinish: {
@@ -20,9 +21,25 @@ export function startWatcher(rootDir, onHint) {
   for (const event of ["add", "change", "unlink", "addDir", "unlinkDir"]) {
     watcher.on(event, (p) => onHint(p));
   }
-  watcher
-    .on("ready", () => log.info(`Watching ${rootDir} for changes`))
-    .on("error", (err) => log.error("Watcher error", err));
+  watcher.on("error", (err) => log.error("Watcher error", err));
 
-  return watcher;
+  return {
+    // Watch exactly these folders
+    setPaths(paths) {
+      const wanted = new Set(paths);
+      for (const p of watched) {
+        if (!wanted.has(p)) {
+          watcher.unwatch(p);
+          watched.delete(p);
+        }
+      }
+      for (const p of wanted) {
+        if (!watched.has(p)) {
+          watcher.add(p);
+          watched.add(p);
+        }
+      }
+    },
+    close: () => watcher.close(),
+  };
 }

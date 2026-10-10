@@ -5,6 +5,11 @@
 // "file_versions"    = every version of every file, and which chunks it's made of
 // "commands"         = jobs for agents to carry out (e.g. restores), picked up on their next heartbeat
 // "alerts"           = things an admin needs to look at (quarantined files, frozen devices)
+// "device_folders"   = the folders each device backs up, managed from the web UI
+//
+// File paths start with the backup folder's name: "Documents/report.docx" is report.docx in the
+// device's "Documents" folder. Devices from before multi-folder support are upgraded once
+// ("path_layout" 1 -> 2) when their new agent first connects.
 //
 // Every file version has a status: "ok", "quarantined" (suspected ransomware, waiting for review)
 // or "rejected". Only "ok" versions are ever used for browsing and restoring.
@@ -93,6 +98,25 @@ export function openDatabase(dataDir) {
       acknowledged_at TEXT,
       acknowledged_by TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS device_folders (
+      id          TEXT PRIMARY KEY,
+      device_id   TEXT NOT NULL REFERENCES devices(id),
+      name        TEXT NOT NULL,
+      path        TEXT NOT NULL,
+      excludes    TEXT NOT NULL DEFAULT '[]',
+      status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'removed')),
+      added_at    TEXT NOT NULL,
+      added_by    TEXT,
+      removed_at  TEXT,
+      removed_by  TEXT,
+      state       TEXT,
+      error       TEXT,
+      files       INTEGER,
+      bytes       INTEGER,
+      reported_at TEXT,
+      UNIQUE (device_id, name)
+    );
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
@@ -105,6 +129,12 @@ export function openDatabase(dataDir) {
     db.exec("ALTER TABLE devices ADD COLUMN frozen_reason TEXT");
   }
   if (!deviceColumns.includes("unfrozen_at")) db.exec("ALTER TABLE devices ADD COLUMN unfrozen_at TEXT");
+  if (!deviceColumns.includes("path_layout")) {
+    db.exec("ALTER TABLE devices ADD COLUMN path_layout INTEGER NOT NULL DEFAULT 1");
+    db.exec("ALTER TABLE devices ADD COLUMN folders_version INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE devices ADD COLUMN allowed_paths TEXT");
+    db.exec("ALTER TABLE devices ADD COLUMN platform TEXT");
+  }
   const versionColumns = db.prepare("PRAGMA table_info(file_versions)").all().map((c) => c.name);
   if (!versionColumns.includes("status")) {
     db.exec("ALTER TABLE file_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'");
@@ -214,6 +244,28 @@ export function openDatabase(dataDir) {
       JOIN devices d ON d.id = c.device_id
       ORDER BY c.id DESC LIMIT ?
     `),
+    listFolders: db.prepare("SELECT * FROM device_folders WHERE device_id = ? ORDER BY status, name COLLATE NOCASE"),
+    getFolder: db.prepare("SELECT * FROM device_folders WHERE id = ?"),
+    addFolder: db.prepare(
+      "INSERT INTO device_folders (id, device_id, name, path, excludes, added_at, added_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ),
+    reactivateFolder: db.prepare(`
+      UPDATE device_folders SET status = 'active', excludes = ?, added_at = ?, added_by = ?, removed_at = NULL,
+        removed_by = NULL, state = NULL, error = NULL, reported_at = NULL
+      WHERE id = ?
+    `),
+    removeFolder: db.prepare(
+      "UPDATE device_folders SET status = 'removed', removed_at = ?, removed_by = ?, state = NULL WHERE id = ? AND status = 'active'"
+    ),
+    setFolderExcludes: db.prepare("UPDATE device_folders SET excludes = ? WHERE id = ?"),
+    folderReport: db.prepare(`
+      UPDATE device_folders SET state = ?, error = ?, files = ?, bytes = ?, reported_at = ?
+      WHERE id = ? AND device_id = ? AND status = 'active'
+    `),
+    bumpFolders: db.prepare("UPDATE devices SET folders_version = folders_version + 1 WHERE id = ?"),
+    setAgentInfo: db.prepare("UPDATE devices SET allowed_paths = ?, platform = ? WHERE id = ?"),
+    prefixPaths: db.prepare("UPDATE file_versions SET rel_path = ? || '/' || rel_path WHERE device_id = ?"),
+    setLayout: db.prepare("UPDATE devices SET path_layout = ? WHERE id = ?"),
     storageStats: db.prepare(`
       SELECT device_id, COUNT(*) AS chunks, SUM(plain_size) AS plain, SUM(box_size) AS stored
       FROM chunks GROUP BY device_id
@@ -307,6 +359,38 @@ export function openDatabase(dataDir) {
     listAlerts: (limit = 100) => q.listAlerts.all(limit),
     ackAlert: (id, by) => q.ackAlert.run(now(), by, id).changes === 1,
     openAlertCount: () => q.openAlertCount.get().n,
+
+    // Backup folders
+    listFolders: (deviceId) => q.listFolders.all(deviceId),
+    getFolder: (id) => q.getFolder.get(id),
+    addFolder: (deviceId, { id, name, path, excludes, by }) =>
+      q.addFolder.run(id, deviceId, name, path, JSON.stringify(excludes ?? []), now(), by ?? null),
+    reactivateFolder: (id, { excludes, by }) => q.reactivateFolder.run(JSON.stringify(excludes ?? []), now(), by ?? null, id),
+    removeFolder: (id, by) => q.removeFolder.run(now(), by ?? null, id).changes === 1,
+    setFolderExcludes: (id, excludes) => q.setFolderExcludes.run(JSON.stringify(excludes), id),
+    saveFolderReport: (deviceId, r) =>
+      q.folderReport.run(r.state, r.error ?? null, r.files ?? null, r.bytes ?? null, now(), r.id, deviceId),
+    bumpFoldersVersion: (deviceId) => q.bumpFolders.run(deviceId),
+    setAgentInfo: (deviceId, { allowedPaths, platform }) =>
+      q.setAgentInfo.run(JSON.stringify(allowedPaths ?? []), platform ?? null, deviceId),
+
+    // One-time upgrade of a device to multi-folder paths: its existing backups all came from one
+    // folder, so they move under that folder's name ("report.docx" -> "client-files/report.docx")
+    upgradeLayout: (deviceId, legacy) => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (legacy) {
+          q.prefixPaths.run(legacy.name, deviceId);
+          q.addFolder.run(legacy.id, deviceId, legacy.name, legacy.path, "[]", now(), "agent");
+          q.bumpFolders.run(deviceId);
+        }
+        q.setLayout.run(2, deviceId);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
 
     close: () => db.close(),
   };

@@ -6,9 +6,10 @@
 //   3. only if the SHA-256 matches the backed-up version, move the file into place
 //
 // Modes:
-//   copy      (default) restore into "_Restored/<date> job N/..." inside the backup folder.
-//             Originals are never touched.
-//   overwrite put files back in their original locations.
+//   copy      (default) restore into "_Restored/<date> job N/..." inside each file's backup folder.
+//             Originals are never touched. Files from a folder this device doesn't have (e.g. a
+//             replacement PC) go into the first backup folder's "_Restored", under the folder name.
+//   overwrite put files back in their original locations (the folder must exist on this device).
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -39,13 +40,26 @@ function folderStamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(date.getMinutes())}`;
 }
 
-export function createRestorer({ config, db, connection }) {
+export function createRestorer({ db, connection, tracker }) {
   const { client, auth } = connection;
   const running = new Set();
   let queue = Promise.resolve();
 
-  async function restoreFile(job, file, keys, rootDir) {
-    const target = safeJoin(rootDir, file.relPath);
+  // Where a backed-up path ("Documents/a/b.txt") goes on this device
+  function targetFor(relPath, mode, jobFolder) {
+    const [name, ...rest] = relPath.split("/");
+    const folder = tracker.folderByName(name);
+    if (mode === "overwrite") {
+      if (!folder) throw new Error(`the backup folder "${name}" isn't on this device`);
+      return safeJoin(folder.path, rest.join("/"));
+    }
+    if (folder) return safeJoin(path.join(folder.path, "_Restored", jobFolder), rest.join("/"));
+    const first = tracker.folders()[0];
+    if (!first) throw new Error("this device has no backup folder to restore into — add one first");
+    return safeJoin(path.join(first.path, "_Restored", jobFolder), relPath);
+  }
+
+  async function restoreFile(job, file, keys, target) {
     await fsp.mkdir(path.dirname(target), { recursive: true });
 
     // ".tmp" files are ignored by the watcher, so half-restored files are never backed up
@@ -88,17 +102,14 @@ export function createRestorer({ config, db, connection }) {
     const manifestBox = await client.signedGet(`/api/restore/${summary.id}/manifest`, auth);
     const manifest = JSON.parse(open(keys.encKey, manifestBox, `restore:${summary.id}:manifest`, 64 * 1024 * 1024).toString("utf8"));
 
-    const rootDir =
-      manifest.mode === "overwrite"
-        ? config.watchDir
-        : path.join(config.watchDir, "_Restored", `${folderStamp()} job ${summary.id}`);
+    const jobFolder = `${folderStamp()} job ${summary.id}`;
 
     let restored = 0;
     let bytes = 0;
     const errors = [];
     for (const file of manifest.files) {
       try {
-        bytes += await restoreFile(summary, file, keys, rootDir);
+        bytes += await restoreFile(summary, file, keys, targetFor(file.relPath, manifest.mode, jobFolder));
         restored++;
         log.info(`restored ${file.relPath} (${formatSize(file.size)}, sha256 verified)`);
       } catch (err) {
@@ -113,7 +124,7 @@ export function createRestorer({ config, db, connection }) {
     log.info(
       `Restore job #${summary.id} finished: ${restored} file(s), ${formatSize(bytes)} restored` +
         (errors.length ? `, ${errors.length} failed` : "") +
-        ` → ${rootDir}`
+        (manifest.mode === "overwrite" ? " → original locations" : ` → "_Restored/${jobFolder}"`)
     );
   }
 

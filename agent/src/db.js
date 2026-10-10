@@ -3,6 +3,10 @@
 // "changes" = queue of changes waiting to be sent to the gateway
 //             status: pending -> sent (or superseded / skipped)
 // "jobs_done" = jobs from the gateway (like restores) already carried out, so none ever runs twice
+// "folders"   = the backup folders, as last received from the gateway (so they work offline too)
+// "settings"  = small bits of state, like which folder list version is applied
+//
+// Paths start with the backup folder's name: "Documents/report.docx".
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -39,6 +43,18 @@ export function openDatabase(dataDir) {
       result      TEXT NOT NULL,
       finished_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS folders (
+      name     TEXT PRIMARY KEY,
+      id       TEXT NOT NULL,
+      path     TEXT NOT NULL,
+      excludes TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
@@ -72,7 +88,21 @@ export function openDatabase(dataDir) {
     getJobDone: db.prepare("SELECT * FROM jobs_done WHERE id = ?"),
     addJobDone: db.prepare("INSERT OR REPLACE INTO jobs_done (id, result, finished_at) VALUES (?, ?, ?)"),
     markSent: db.prepare("UPDATE changes SET status = 'sent', sent_at = ?, version_no = ? WHERE id = ?"),
+    listFolders: db.prepare("SELECT * FROM folders ORDER BY name"),
+    clearFolders: db.prepare("DELETE FROM folders"),
+    addFolder: db.prepare("INSERT INTO folders (name, id, path, excludes) VALUES (?, ?, ?, ?)"),
+    getSetting: db.prepare("SELECT value FROM settings WHERE key = ?"),
+    setSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
+    deleteSetting: db.prepare("DELETE FROM settings WHERE key = ?"),
+    prefixFiles: db.prepare("UPDATE files SET rel_path = ? || '/' || rel_path"),
+    prefixChanges: db.prepare("UPDATE changes SET rel_path = ? || '/' || rel_path"),
+    forgetUnder: db.prepare("DELETE FROM files WHERE rel_path LIKE ? ESCAPE '\\'"),
+    skipUnder: db.prepare("UPDATE changes SET status = 'skipped' WHERE status = 'pending' AND rel_path LIKE ? ESCAPE '\\'"),
+    statsUnder: db.prepare("SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM files WHERE rel_path LIKE ? ESCAPE '\\'"),
   };
+
+  // LIKE pattern for everything inside a folder (escaping % and _ in names)
+  const under = (name) => `${name.replace(/[\\%_]/g, (c) => "\\" + c)}/%`;
 
   return {
     getFile: (relPath) => q.getFile.get(relPath),
@@ -97,6 +127,44 @@ export function openDatabase(dataDir) {
     },
     saveJobDone: (id, result) => q.addJobDone.run(id, JSON.stringify(result), new Date().toISOString()),
     markChangeSent: (id, versionNo) => q.markSent.run(new Date().toISOString(), versionNo ?? null, id),
+    // Backup folders
+    listFolders: () => q.listFolders.all().map((f) => ({ ...f, excludes: JSON.parse(f.excludes) })),
+    replaceFolders(list) {
+      db.exec("BEGIN");
+      try {
+        q.clearFolders.run();
+        for (const f of list) q.addFolder.run(f.name, f.id, f.path, JSON.stringify(f.excludes ?? []));
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
+    getSetting: (key) => {
+      const row = q.getSetting.get(key);
+      return row ? JSON.parse(row.value) : null;
+    },
+    setSetting: (key, value) => q.setSetting.run(key, JSON.stringify(value)),
+    deleteSetting: (key) => q.deleteSetting.run(key),
+    // One-time upgrade from the single-folder days: every path moves under the folder's name
+    prefixAllPaths(name) {
+      db.exec("BEGIN");
+      try {
+        q.prefixFiles.run(name);
+        q.prefixChanges.run(name);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
+    // A folder is no longer backed up: forget its files WITHOUT recording them as deleted
+    forgetFolder(name) {
+      const pattern = under(name);
+      return { forgotten: Number(q.forgetUnder.run(pattern).changes), skipped: Number(q.skipUnder.run(pattern).changes) };
+    },
+    folderStats: (name) => q.statsUnder.get(under(name)),
+
     transaction: (fn) => {
       db.exec("BEGIN");
       try {

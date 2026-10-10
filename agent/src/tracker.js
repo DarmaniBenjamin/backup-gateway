@@ -1,5 +1,9 @@
 // Decides what really changed by comparing the disk with the database.
 // The watcher only says "look at this path" — the tracker works out the truth.
+//
+// It handles several backup folders. Every path in the database starts with the folder's name:
+// the file C:\Users\Anna\Documents\report.docx in the folder named "Documents" is stored as
+// "Documents/report.docx".
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,11 +11,47 @@ import { hashFile } from "./hasher.js";
 import { isIgnored } from "./ignore.js";
 import { log } from "./logger.js";
 
-// Database paths always use "/" so they're the same on Windows and Linux
-const toRel = (rootDir, absPath) => path.relative(rootDir, absPath).split(path.sep).join("/");
-const toAbs = (rootDir, relPath) => path.join(rootDir, ...relPath.split("/"));
+// "*.mp4" / "Cache" / "~*" -> a case-insensitive regular expression matching one file or folder name
+function compilePattern(pattern) {
+  const re = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${re}$`, "i");
+}
 
-export function createTracker(rootDir, db, onChange) {
+export function createTracker(db, onChange) {
+  let folders = []; // [{ id, name, path, excludes, patterns }]
+
+  // The backup folder an absolute path is in (or null)
+  function folderFor(absPath) {
+    for (const f of folders) {
+      const rel = path.relative(f.path, absPath);
+      if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return f;
+    }
+    return null;
+  }
+
+  // Database paths always use "/" so they're the same on Windows and Linux
+  function toRel(absPath) {
+    const f = folderFor(absPath);
+    if (!f) return null;
+    const inner = path.relative(f.path, absPath).split(path.sep).join("/");
+    return inner ? `${f.name}/${inner}` : f.name;
+  }
+
+  function toAbs(relPath) {
+    const [name, ...rest] = relPath.split("/");
+    const f = folders.find((x) => x.name === name);
+    return f ? path.join(f.path, ...rest) : null;
+  }
+
+  // Built-in rules (temp files, recycle bins...) plus the folder's own exclusion patterns
+  function isExcluded(absPath) {
+    if (isIgnored(absPath)) return true;
+    const f = folderFor(absPath);
+    if (!f || f.patterns.length === 0) return false;
+    const parts = path.relative(f.path, absPath).split(path.sep).filter(Boolean);
+    return parts.some((part) => f.patterns.some((re) => re.test(part)));
+  }
+
   function report(type, relPath, size, sha256) {
     db.recordChange(type, relPath, size, sha256);
     onChange({ type, relPath, size, sha256 });
@@ -19,7 +59,8 @@ export function createTracker(rootDir, db, onChange) {
 
   // Look at one file on disk and compare it to what the database knows.
   async function checkFile(absPath, stats) {
-    const relPath = toRel(rootDir, absPath);
+    const relPath = toRel(absPath);
+    if (!relPath) return;
     const known = db.getFile(relPath);
 
     // Quick check: same size and modified time = unchanged, no need to re-read it
@@ -61,23 +102,23 @@ export function createTracker(rootDir, db, onChange) {
     for (const p of goneFiles) onChange({ type: "deleted", relPath: p, size: null, sha256: null });
   }
 
-  // Walk a folder and check every file in it. Returns the set of files seen.
-  async function scanFolder(absDir, seen) {
+  // Walk a folder and check every file in it, adding each file seen to `seen`.
+  async function scanDir(absDir, seen) {
     let entries;
     try {
       entries = await fs.readdir(absDir, { withFileTypes: true });
     } catch (err) {
-      log.warn(`Could not read folder ${toRel(rootDir, absDir) || "."}: ${err.code || err.message}`);
-      return;
+      log.warn(`Could not read folder ${absDir}: ${err.code || err.message}`);
+      return false;
     }
     for (const entry of entries) {
       const absPath = path.join(absDir, entry.name);
-      if (isIgnored(absPath)) continue;
+      if (isExcluded(absPath)) continue;
       if (entry.isSymbolicLink()) continue; // never follow links out of the backup folder
       if (entry.isDirectory()) {
-        await scanFolder(absPath, seen);
+        await scanDir(absPath, seen);
       } else if (entry.isFile()) {
-        seen?.add(toRel(rootDir, absPath));
+        seen?.add(toRel(absPath));
         try {
           await checkFile(absPath, await fs.stat(absPath));
         } catch (err) {
@@ -85,33 +126,57 @@ export function createTracker(rootDir, db, onChange) {
         }
       }
     }
+    return true;
+  }
+
+  // Scan one backup folder completely: new, changed and deleted files
+  async function scanFolder(folder) {
+    const seen = new Set();
+    // If the folder itself can't be read (drive unplugged, permissions), don't treat
+    // everything in it as deleted
+    if (!(await scanDir(folder.path, seen))) return;
+    const missing = db.filesUnder(folder.name).filter((p) => !seen.has(p));
+    for (const p of missing) markGone(p);
   }
 
   return {
+    // The folders to back up (already checked by the folder manager)
+    setFolders(list) {
+      folders = list.map((f) => ({ ...f, patterns: (f.excludes ?? []).map(compilePattern) }));
+    },
+    folders: () => folders,
+    folderByName: (name) => folders.find((f) => f.name === name) ?? null,
+
     // Called for every watcher hint. Works out what actually happened.
     async inspect(absPath) {
-      if (isIgnored(absPath)) return;
-      const relPath = toRel(rootDir, absPath);
+      if (!folderFor(absPath) || isExcluded(absPath)) return;
+      const relPath = toRel(absPath);
       let stats;
       try {
         stats = await fs.lstat(absPath);
       } catch (err) {
-        if (err.code === "ENOENT") return markGone(relPath);
+        if (err.code === "ENOENT") {
+          // The backup folder itself vanished (unplugged drive, renamed): wait for the next scan
+          if (!relPath.includes("/")) return;
+          return markGone(relPath);
+        }
         throw err;
       }
       if (stats.isSymbolicLink()) return;
-      if (stats.isDirectory()) return scanFolder(absPath); // e.g. a folder moved in
+      if (stats.isDirectory()) return scanDir(absPath); // e.g. a folder moved in
       if (stats.isFile()) return checkFile(absPath, stats);
     },
 
-    // Full scan at startup: catches everything that changed while the agent was off.
+    // Full scan: catches everything that changed while the agent was off
     async fullScan() {
-      const seen = new Set();
-      await scanFolder(rootDir, seen);
-      const missing = db.allPaths().filter((p) => !seen.has(p));
-      for (const p of missing) markGone(p);
+      for (const f of folders) await scanFolder(f);
+    },
+    scanFolder: (name) => {
+      const f = folders.find((x) => x.name === name);
+      return f ? scanFolder(f) : null;
     },
 
-    toAbs: (relPath) => toAbs(rootDir, relPath),
+    isExcluded,
+    toAbs,
   };
 }

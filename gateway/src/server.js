@@ -8,6 +8,9 @@
 //   GET  /api/restore/:job/manifest          (signed) encrypted list of files to restore
 //   GET  /api/restore/:job/chunks/:chunkId   (signed) one chunk, re-encrypted for the restoring device
 //   POST /api/commands/result                (signed) agent reports how a job went
+//   GET  /api/wait                (signed) held open until there's work for the agent (live link)
+//   POST /api/folders/sync        (signed, encrypted) agent reports its folders, gets the wanted list
+//   POST /api/browse/result       (signed, encrypted) agent's answer to "list the folders in X"
 
 import http from "node:http";
 import crypto from "node:crypto";
@@ -15,6 +18,7 @@ import { hashCode } from "./codes.js";
 import { verifyRequest, AuthError } from "./auth.js";
 import { CHUNK_SIZE, chunkId as makeChunkId, open, seal } from "./crypto-box.js";
 import { inspectFile } from "./inspect.js";
+import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js";
 import { log } from "./logger.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
@@ -22,6 +26,8 @@ const LIMIT_CHUNK = CHUNK_SIZE + 1024;   // one sealed chunk + a little overhead
 const LIMIT_COMMIT = 8 * 1024 * 1024;    // file manifest (list of chunk IDs)
 const MAX_CHECK_IDS = 1000;
 const CHUNK_ID_RE = /^[a-f0-9]{64}$/;
+const WAIT_MS = 25_000; // how long the live-link request is held open
+const FOLDER_STATES = new Set(["ok", "missing", "denied"]);
 
 // Simple brute-force protection for enrollment: max 10 attempts per IP per 15 minutes
 const enrollAttempts = new Map();
@@ -106,7 +112,23 @@ function isSafeRelPath(p) {
   return p.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
-export function createServer({ db, keys, storage, guard }) {
+// Per-folder status the agent reports: { id, state, error, files, bytes }
+function cleanFolderReports(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 100).flatMap((f) =>
+    typeof f?.id === "string" && FOLDER_STATES.has(f.state)
+      ? [{
+          id: f.id.slice(0, 40),
+          state: f.state,
+          error: typeof f.error === "string" ? f.error.slice(0, 300) : null,
+          files: Number.isInteger(f.files) ? f.files : null,
+          bytes: Number.isFinite(f.bytes) ? f.bytes : null,
+        }]
+      : []
+  );
+}
+
+export function createServer({ db, keys, storage, guard, broker }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -161,6 +183,7 @@ export function createServer({ db, keys, storage, guard }) {
       filesTracked: Number.isInteger(info.filesTracked) ? info.filesTracked : null,
       pendingChanges: Number.isInteger(info.pendingChanges) ? info.pendingChanges : null,
     });
+    for (const report of cleanFolderReports(info.folders)) db.saveFolderReport(device.id, report);
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
 
     // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
@@ -174,7 +197,75 @@ export function createServer({ db, keys, storage, guard }) {
           return { id: c.id, sealed: sealed.toString("base64") };
         })
       : [];
-    return send(res, 200, { ok: true, serverTime: Date.now(), commands });
+    // Folder-browse requests from the web UI, also encrypted for this device only
+    const browse = k
+      ? broker.takeBrowseRequests(device.id).map((b) => ({
+          id: b.id,
+          sealed: seal(k.encKey, Buffer.from(JSON.stringify(b)), `browse:${device.id}:${b.id}`).toString("base64"),
+        }))
+      : [];
+    return send(res, 200, { ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0 });
+  }
+
+  // Live link: held open until there's work for this device, or WAIT_MS passes
+  async function handleWait(req, res, device) {
+    const work = await broker.wait(device.id, WAIT_MS, (stop) => res.on("close", stop));
+    if (!res.writableEnded && !res.destroyed) send(res, 200, { work });
+  }
+
+  // The agent reports its folders and gets the list it should be backing up.
+  // Also upgrades a device from the single-folder days the first time its new agent connects.
+  function handleFolderSync(res, device, body) {
+    const { encKey } = deviceKeys(device);
+    let report;
+    try {
+      report = JSON.parse(open(encKey, body, `folders-report:${device.id}`).toString("utf8"));
+    } catch {
+      throw new HttpError(422, "Folder report failed integrity check");
+    }
+
+    const allowedPaths = Array.isArray(report.allowedPaths)
+      ? report.allowedPaths.filter(isValidDevicePath).slice(0, 20)
+      : [];
+    const platform = typeof report.platform === "string" ? report.platform.slice(0, 20) : null;
+    db.setAgentInfo(device.id, { allowedPaths, platform });
+
+    if ((device.path_layout ?? 1) < 2) {
+      const legacy = report.legacyFolder;
+      if (legacy && (!isValidFolderName(legacy.name) || !isValidDevicePath(legacy.path))) {
+        throw new HttpError(400, "Bad legacy folder");
+      }
+      db.upgradeLayout(device.id, legacy ? { id: newFolderId(), name: legacy.name, path: legacy.path } : null);
+      log.info(
+        legacy
+          ? `${device.device_name}: upgraded to multiple backup folders — existing backups are now in folder "${legacy.name}"`
+          : `${device.device_name}: ready for multiple backup folders`
+      );
+    }
+
+    for (const r of cleanFolderReports(report.folders)) db.saveFolderReport(device.id, r);
+
+    const fresh = db.getDevice(device.id);
+    const wanted = {
+      version: fresh.folders_version,
+      folders: db
+        .listFolders(device.id)
+        .filter((f) => f.status === "active")
+        .map((f) => ({ id: f.id, name: f.name, path: f.path, excludes: JSON.parse(f.excludes) })),
+    };
+    return sendBinary(res, 200, seal(encKey, Buffer.from(JSON.stringify(wanted)), `folders:${device.id}`));
+  }
+
+  function handleBrowseResult(res, device, body) {
+    const { encKey } = deviceKeys(device);
+    let answer;
+    try {
+      answer = JSON.parse(open(encKey, body, `browse-result:${device.id}`, 4 * 1024 * 1024).toString("utf8"));
+    } catch {
+      throw new HttpError(422, "Browse result failed integrity check");
+    }
+    broker.answerBrowse(device.id, String(answer.id), answer);
+    return send(res, 200, { ok: true });
   }
 
   // A restore job that belongs to this device and isn't finished yet
@@ -396,6 +487,9 @@ export function createServer({ db, keys, storage, guard }) {
       else if (req.method === "POST" && url === "/api/chunks/check") [route, limit] = ["check", LIMIT_SMALL * 2];
       else if (req.method === "POST" && url === "/api/files/commit") [route, limit] = ["commit", LIMIT_COMMIT];
       else if (req.method === "POST" && url === "/api/commands/result") [route, limit] = ["result", LIMIT_SMALL];
+      else if (req.method === "POST" && url === "/api/folders/sync") [route, limit] = ["folders", LIMIT_SMALL * 4];
+      else if (req.method === "POST" && url === "/api/browse/result") [route, limit] = ["browse", 4 * 1024 * 1024];
+      else if (req.method === "GET" && url === "/api/wait") [route, limit] = ["wait", 0];
       else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/manifest$/))) {
         [route, limit, jobIdParam] = ["manifest", 0, Number(match[1])];
       } else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/chunks\/([a-f0-9]{64})$/))) {
@@ -420,6 +514,9 @@ export function createServer({ db, keys, storage, guard }) {
         case "result": return handleCommandResult(res, device, body);
         case "manifest": return handleRestoreManifest(res, device, jobIdParam);
         case "restore-chunk": return handleRestoreChunk(res, device, jobIdParam, chunkIdParam);
+        case "wait": return await handleWait(req, res, device);
+        case "folders": return handleFolderSync(res, device, body);
+        case "browse": return handleBrowseResult(res, device, body);
       }
     } catch (err) {
       if (err instanceof AuthError) {
