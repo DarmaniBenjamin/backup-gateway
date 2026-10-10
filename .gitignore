@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Built web UI (rebuilt with npm run build)
+dist/
+
 # Secrets and config with secrets
 .env
 .env.*
