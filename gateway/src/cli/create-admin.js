@@ -5,6 +5,7 @@
 
 import readline from "node:readline";
 import { loadConfig } from "../config.js";
+import { openDatabase } from "../db.js";
 import { openAdminStore } from "../admin/admin-store.js";
 import { hashPassword, checkPasswordStrength } from "../admin/passwords.js";
 
@@ -15,7 +16,9 @@ if (!/^[A-Za-z0-9._-]{3,40}$/.test(username)) {
   process.exit(1);
 }
 
-const store = openAdminStore(loadConfig().dataDir);
+const config = loadConfig();
+openDatabase(config.dataDir).close(); // creates all tables on a brand-new install
+const store = openAdminStore(config.dataDir);
 
 // One reader for all questions. While "muted", typed characters are shown as *
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });

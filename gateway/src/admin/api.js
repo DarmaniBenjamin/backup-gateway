@@ -15,11 +15,18 @@
 //   POST /admin/api/verify                    run the integrity check now
 //   GET  /admin/api/verify/last
 //   GET  /admin/api/audit
+//   GET  /admin/api/quarantine                 versions held back as suspected ransomware
+//   POST /admin/api/quarantine/release         { ids } → become normal versions
+//   POST /admin/api/quarantine/reject          { ids } → kept as evidence, never restorable
+//   POST /admin/api/devices/:id/unfreeze       resume normal backups for a frozen device
+//   GET  /admin/api/alerts
+//   POST /admin/api/alerts/:id/ack
 
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
 import { runVerify } from "../verify.js";
 import { verifyPassword, burnTime } from "./passwords.js";
+import { REASON_TEXT } from "../inspect.js";
 import { log } from "../logger.js";
 
 const ONLINE_WINDOW_MS = 90_000; // seen within 90 s (3 missed heartbeats) = online
@@ -46,6 +53,7 @@ function addFailure(key) {
 
 function deviceStatus(device) {
   if (device.status !== "active") return device.status;
+  if (device.frozen_at) return "frozen";
   if (!device.last_seen_at) return "never-seen";
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
@@ -66,6 +74,9 @@ export function createAdminApi({ db, store, keys, storage, config }) {
       filesTracked: d.files_tracked,
       pendingChanges: d.pending_changes,
       encryptionReady: !!d.kx_public_key,
+      frozenAt: d.frozen_at,
+      frozenReason: d.frozen_reason,
+      online: !!d.last_seen_at && Date.now() - new Date(d.last_seen_at) < ONLINE_WINDOW_MS,
       versions: s?.versions ?? 0,
       lastBackupAt: s?.last_backup ?? null,
       originalBytes: storageRow?.plain ?? 0,
@@ -139,9 +150,12 @@ export function createAdminApi({ db, store, keys, storage, config }) {
       return {
         devices: {
           total: devices.length,
-          online: devices.filter((d) => d.status === "online").length,
-          offline: devices.filter((d) => d.status === "offline" || d.status === "never-seen").length,
+          online: devices.filter((d) => d.online).length,
+          offline: devices.filter((d) => !d.online).length,
+          frozen: devices.filter((d) => d.status === "frozen").length,
         },
+        quarantined: db.listQuarantine(10000).length,
+        openAlerts: db.openAlertCount(),
         files: stats.reduce((n, s) => n + s.paths, 0),
         versions: stats.reduce((n, s) => n + s.versions, 0),
         pendingChanges: devices.reduce((n, d) => n + (d.pendingChanges ?? 0), 0),
@@ -234,6 +248,8 @@ export function createAdminApi({ db, store, keys, storage, config }) {
           size: v.size,
           sha256: v.sha256,
           backedUpAt: v.received_at,
+          status: v.status,
+          reasons: v.reasons ? JSON.parse(v.reasons).map((r) => REASON_TEXT[r] ?? r) : [],
         })),
       };
     },
@@ -249,12 +265,14 @@ export function createAdminApi({ db, store, keys, storage, config }) {
 
       const buckets = [];
       for (let t = start; t <= end; t += bucketMs) {
-        buckets.push({ start: new Date(t).toISOString(), added: 0, changed: 0, deleted: 0 });
+        buckets.push({ start: new Date(t).toISOString(), added: 0, changed: 0, deleted: 0, quarantined: 0 });
       }
       const rows = store.activitySince(device.id, new Date(start).toISOString());
       for (const r of rows) {
         const i = Math.floor((new Date(r.received_at) - start) / bucketMs);
-        if (buckets[i]) buckets[i][r.type]++;
+        if (!buckets[i]) continue;
+        if (r.status === "ok") buckets[i][r.type]++;
+        else buckets[i].quarantined++;
       }
       return {
         bucketMinutes: bucketMin,
@@ -265,6 +283,7 @@ export function createAdminApi({ db, store, keys, storage, config }) {
           type: r.type,
           size: r.size,
           at: r.received_at,
+          status: r.status,
         })),
       };
     },
@@ -311,7 +330,72 @@ export function createAdminApi({ db, store, keys, storage, config }) {
     "GET /audit"() {
       return store.listAudit(200);
     },
+
+    "GET /quarantine"() {
+      return db.listQuarantine(500).map((v) => ({
+        id: v.id,
+        deviceId: v.device_id,
+        device: v.device_name,
+        client: v.client_name,
+        path: v.rel_path,
+        versionNo: v.version_no,
+        type: v.type,
+        size: v.size,
+        entropy: v.entropy,
+        reasons: v.reasons ? JSON.parse(v.reasons).map((r) => REASON_TEXT[r] ?? r) : [],
+        receivedAt: v.received_at,
+      }));
+    },
+
+    "POST /quarantine/release"({ body, admin, ip }) {
+      return review(body, "ok", admin, ip);
+    },
+
+    "POST /quarantine/reject"({ body, admin, ip }) {
+      return review(body, "rejected", admin, ip);
+    },
+
+    "POST /devices/:id/unfreeze"({ params, admin, ip }) {
+      const device = getDeviceOr404(params.id);
+      if (!device.frozen_at) throw new ApiError(400, "This device isn't frozen.");
+      db.unfreezeDevice(device.id);
+      store.audit(admin.username, "device.unfrozen", { device: device.device_name, reason: device.frozen_reason }, ip);
+      log.info(`Admin "${admin.username}" unfroze ${device.device_name}`);
+      return { ok: true };
+    },
+
+    "GET /alerts"() {
+      return db.listAlerts(100).map((a) => ({
+        id: a.id,
+        kind: a.kind,
+        message: a.message,
+        device: a.device_name,
+        deviceId: a.device_id,
+        client: a.client_name,
+        createdAt: a.created_at,
+        acknowledgedAt: a.acknowledged_at,
+        acknowledgedBy: a.acknowledged_by,
+      }));
+    },
+
+    "POST /alerts/:id/ack"({ params, admin, ip }) {
+      if (!db.ackAlert(Number(params.id), admin.username)) throw new ApiError(404, "Alert not found or already dismissed.");
+      store.audit(admin.username, "alert.dismissed", { alertId: Number(params.id) }, ip);
+      return { ok: true };
+    },
   };
+
+  // Release (status "ok") or reject quarantined versions
+  function review(body, status, admin, ip) {
+    const ids = Array.isArray(body.ids) ? body.ids.filter(Number.isInteger).slice(0, 1000) : [];
+    if (!ids.length) throw new ApiError(400, "No items selected.");
+    let changed = 0;
+    for (const id of ids) if (db.reviewVersion(id, status, admin.username)) changed++;
+    const action = status === "ok" ? "quarantine.released" : "quarantine.rejected";
+    store.audit(admin.username, action, { count: changed }, ip);
+    log.info(`Admin "${admin.username}" ${status === "ok" ? "released" : "rejected"} ${changed} quarantined version(s)`);
+    return { changed };
+  }
 
   // Turn "GET /devices/:id/files" patterns into matchers
   const compiled = Object.entries(routes).map(([key, handler]) => {

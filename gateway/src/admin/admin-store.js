@@ -75,11 +75,11 @@ export function openAdminStore(dataDir) {
       FROM file_versions GROUP BY device_id
     `),
     activitySince: db.prepare(`
-      SELECT rel_path, version_no, type, size, received_at FROM file_versions
+      SELECT rel_path, version_no, type, size, received_at, status FROM file_versions
       WHERE device_id = ? AND received_at >= ? ORDER BY received_at
     `),
     versionsOfFile: db.prepare(`
-      SELECT version_no, type, size, sha256, received_at FROM file_versions
+      SELECT version_no, type, size, sha256, received_at, status, reasons FROM file_versions
       WHERE device_id = ? AND rel_path = ? ORDER BY version_no DESC
     `),
   };

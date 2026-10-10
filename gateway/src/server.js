@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import { hashCode } from "./codes.js";
 import { verifyRequest, AuthError } from "./auth.js";
 import { CHUNK_SIZE, chunkId as makeChunkId, open, seal } from "./crypto-box.js";
+import { inspectFile } from "./inspect.js";
 import { log } from "./logger.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
@@ -105,7 +106,7 @@ function isSafeRelPath(p) {
   return p.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
-export function createServer({ db, keys, storage }) {
+export function createServer({ db, keys, storage, guard }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -311,9 +312,10 @@ export function createServer({ db, keys, storage }) {
     if (existing) return send(res, 200, { ok: true, version: existing.version_no, duplicate: true });
 
     if (type === "deleted") {
-      const version = db.addVersion(device.id, { changeId, type, relPath });
-      log.info(`${device.device_name}: ${relPath} deleted (v${version})`);
-      return send(res, 201, { ok: true, version });
+      const verdict = guard.decide(db.getDevice(device.id), { relPath, type, reasons: [] });
+      const version = db.addVersion(device.id, { changeId, type, relPath, ...verdict });
+      log.info(`${device.device_name}: ${relPath} deleted (v${version}${verdict.status === "quarantined" ? ", QUARANTINED" : ""})`);
+      return send(res, 201, { ok: true, version, quarantined: verdict.status === "quarantined", reasons: verdict.reasons });
     }
 
     if (!Number.isInteger(size) || size < 0) throw new HttpError(400, "Bad size");
@@ -327,6 +329,8 @@ export function createServer({ db, keys, storage }) {
     if (missing.length) throw new HttpError(409, `Missing ${missing.length} chunk(s)`);
 
     const hash = crypto.createHash("sha256");
+    const histogram = new Array(256).fill(0); // byte counts, for the ransomware checks
+    let header = Buffer.alloc(0);
     let total = 0;
     for (const id of chunkIds) {
       let plaintext = null;
@@ -344,6 +348,8 @@ export function createServer({ db, keys, storage }) {
         throw new HttpError(409, "A stored chunk was corrupted and has been removed; resend it");
       }
       hash.update(plaintext);
+      for (let i = 0; i < plaintext.length; i++) histogram[plaintext[i]]++;
+      if (header.length < 16) header = Buffer.concat([header, plaintext.subarray(0, 16 - header.length)]);
       total += plaintext.length;
     }
     if (total !== size || hash.digest("hex") !== sha256) {
@@ -351,13 +357,27 @@ export function createServer({ db, keys, storage }) {
       throw new HttpError(422, "File failed integrity check");
     }
 
+    // Ransomware checks on the real content, then let the guard decide ok / quarantined
+    const previous = db.lastOkVersion(device.id, relPath);
+    const inspection = inspectFile({ relPath, size, header, histogram, previous });
+    const verdict = guard.decide(db.getDevice(device.id), {
+      relPath,
+      type,
+      reasons: inspection.reasons,
+      sameAsLastGood: previous?.sha256 === sha256,
+    });
+
     const version = db.addVersion(device.id, {
       changeId, type, relPath, size, sha256,
       mtimeMs: Number.isFinite(mtimeMs) ? Math.round(mtimeMs) : null,
       chunkIds,
+      entropy: inspection.entropy,
+      ...verdict,
     });
-    log.info(`${device.device_name}: ${relPath} ${type} (v${version}, ${chunkIds.length} chunk(s), sha256 verified)`);
-    return send(res, 201, { ok: true, version });
+    if (verdict.status === "ok") {
+      log.info(`${device.device_name}: ${relPath} ${type} (v${version}, ${chunkIds.length} chunk(s), sha256 verified)`);
+    }
+    return send(res, 201, { ok: true, version, quarantined: verdict.status === "quarantined", reasons: verdict.reasons });
   }
 
   const server = http.createServer(async (req, res) => {

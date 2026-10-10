@@ -86,7 +86,15 @@ export function createUploader({ db, tracker, connection }) {
       { changeId: change.id, type: change.type, relPath: change.rel_path, size, sha256, mtimeMs: stats.mtimeMs, chunkIds: ids },
       keys
     );
-    return { version: result.version, chunks: ids.length, newChunks: uploaded.size, sentBytes, size };
+    return {
+      version: result.version,
+      chunks: ids.length,
+      newChunks: uploaded.size,
+      sentBytes,
+      size,
+      quarantined: !!result.quarantined,
+      reasons: result.reasons ?? [],
+    };
   }
 
   async function processChange(change, keys) {
@@ -99,7 +107,8 @@ export function createUploader({ db, tracker, connection }) {
     if (change.type === "deleted") {
       const result = await commit({ changeId: change.id, type: "deleted", relPath: change.rel_path }, keys);
       db.markChangeSent(change.id, result.version);
-      log.info(`sent     ${change.rel_path} deleted (v${result.version})`);
+      if (result.quarantined) log.warn(`sent     ${change.rel_path} deleted — QUARANTINED by the gateway (${result.reasons.join(", ")})`);
+      else log.info(`sent     ${change.rel_path} deleted (v${result.version})`);
       return;
     }
 
@@ -111,10 +120,14 @@ export function createUploader({ db, tracker, connection }) {
         return;
       }
       db.markChangeSent(change.id, r.version);
-      log.info(
-        `sent     ${change.rel_path} v${r.version} — ${r.chunks} chunk(s), ${r.newChunks} new, ` +
-          `${formatSize(r.sentBytes)} uploaded for a ${formatSize(r.size)} file`
-      );
+      if (r.quarantined) {
+        log.warn(`sent     ${change.rel_path} — QUARANTINED by the gateway (${r.reasons.join(", ")})`);
+      } else {
+        log.info(
+          `sent     ${change.rel_path} v${r.version} — ${r.chunks} chunk(s), ${r.newChunks} new, ` +
+            `${formatSize(r.sentBytes)} uploaded for a ${formatSize(r.size)} file`
+        );
+      }
     } catch (err) {
       if (err instanceof FileChangedError) {
         // The watcher will report the new edit; this older change is no longer needed

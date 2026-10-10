@@ -4,6 +4,10 @@
 // "chunks"           = which encrypted chunks each device has uploaded
 // "file_versions"    = every version of every file, and which chunks it's made of
 // "commands"         = jobs for agents to carry out (e.g. restores), picked up on their next heartbeat
+// "alerts"           = things an admin needs to look at (quarantined files, frozen devices)
+//
+// Every file version has a status: "ok", "quarantined" (suspected ransomware, waiting for review)
+// or "rejected". Only "ok" versions are ever used for browsing and restoring.
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -79,6 +83,16 @@ export function openDatabase(dataDir) {
       result      TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_commands_device ON commands (device_id, status);
+
+    CREATE TABLE IF NOT EXISTS alerts (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id       TEXT REFERENCES devices(id),
+      kind            TEXT NOT NULL,
+      message         TEXT NOT NULL,
+      created_at      TEXT NOT NULL,
+      acknowledged_at TEXT,
+      acknowledged_by TEXT
+    );
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
@@ -86,6 +100,20 @@ export function openDatabase(dataDir) {
   if (!deviceColumns.includes("kx_public_key")) {
     db.exec("ALTER TABLE devices ADD COLUMN kx_public_key TEXT");
   }
+  if (!deviceColumns.includes("frozen_at")) {
+    db.exec("ALTER TABLE devices ADD COLUMN frozen_at TEXT");
+    db.exec("ALTER TABLE devices ADD COLUMN frozen_reason TEXT");
+  }
+  if (!deviceColumns.includes("unfrozen_at")) db.exec("ALTER TABLE devices ADD COLUMN unfrozen_at TEXT");
+  const versionColumns = db.prepare("PRAGMA table_info(file_versions)").all().map((c) => c.name);
+  if (!versionColumns.includes("status")) {
+    db.exec("ALTER TABLE file_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'");
+    db.exec("ALTER TABLE file_versions ADD COLUMN entropy REAL");
+    db.exec("ALTER TABLE file_versions ADD COLUMN reasons TEXT");
+    db.exec("ALTER TABLE file_versions ADD COLUMN reviewed_by TEXT");
+    db.exec("ALTER TABLE file_versions ADD COLUMN reviewed_at TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_versions_status ON file_versions (device_id, status, received_at)");
 
   const q = {
     addCode: db.prepare(
@@ -120,9 +148,44 @@ export function openDatabase(dataDir) {
     ),
     addVersion: db.prepare(`
       INSERT INTO file_versions
-        (device_id, rel_path, version_no, type, size, sha256, mtime_ms, chunk_ids, agent_change_id, received_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (device_id, rel_path, version_no, type, size, sha256, mtime_ms, chunk_ids, agent_change_id, received_at,
+         status, entropy, reasons)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
+    lastOkVersion: db.prepare(`
+      SELECT * FROM file_versions WHERE device_id = ? AND rel_path = ? AND status = 'ok'
+      ORDER BY version_no DESC LIMIT 1
+    `),
+    countSince: db.prepare(`
+      SELECT
+        SUM(CASE WHEN reasons IS NOT NULL AND reasons NOT LIKE '%device-frozen%' THEN 1 ELSE 0 END) AS suspicious,
+        SUM(CASE WHEN type = 'deleted' THEN 1 ELSE 0 END) AS deleted
+      FROM file_versions WHERE device_id = ? AND received_at >= ?
+    `),
+    quarantineDeletesSince: db.prepare(`
+      UPDATE file_versions SET status = 'quarantined', reasons = '["mass-delete"]'
+      WHERE device_id = ? AND type = 'deleted' AND status = 'ok' AND received_at >= ?
+    `),
+    freeze: db.prepare("UPDATE devices SET frozen_at = ?, frozen_reason = ? WHERE id = ? AND frozen_at IS NULL"),
+    unfreeze: db.prepare("UPDATE devices SET frozen_at = NULL, frozen_reason = NULL, unfrozen_at = ? WHERE id = ?"),
+    listQuarantine: db.prepare(`
+      SELECT v.*, d.device_name, d.client_name FROM file_versions v JOIN devices d ON d.id = v.device_id
+      WHERE v.status = 'quarantined' ORDER BY v.received_at DESC LIMIT ?
+    `),
+    getVersion: db.prepare("SELECT * FROM file_versions WHERE id = ?"),
+    setVersionStatus: db.prepare(
+      "UPDATE file_versions SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'quarantined'"
+    ),
+    addAlert: db.prepare("INSERT INTO alerts (device_id, kind, message, created_at) VALUES (?, ?, ?, ?)"),
+    listAlerts: db.prepare(`
+      SELECT a.*, d.device_name, d.client_name FROM alerts a LEFT JOIN devices d ON d.id = a.device_id
+      ORDER BY a.acknowledged_at IS NOT NULL, a.id DESC LIMIT ?
+    `),
+    ackAlert: db.prepare("UPDATE alerts SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ? AND acknowledged_at IS NULL"),
+    openAlertCount: db.prepare("SELECT COUNT(*) AS n FROM alerts WHERE acknowledged_at IS NULL"),
+    recentOpenAlert: db.prepare(
+      "SELECT id FROM alerts WHERE device_id = ? AND kind = ? AND acknowledged_at IS NULL AND created_at >= ? LIMIT 1"
+    ),
     listVersions: db.prepare(`
       SELECT v.*, d.device_name, d.client_name FROM file_versions v
       JOIN devices d ON d.id = v.device_id
@@ -130,7 +193,7 @@ export function openDatabase(dataDir) {
     `),
     versionsUnder: db.prepare(`
       SELECT * FROM file_versions
-      WHERE device_id = ? AND (? = '' OR rel_path = ? OR rel_path LIKE ? ESCAPE '\\')
+      WHERE device_id = ? AND status = 'ok' AND (? = '' OR rel_path = ? OR rel_path LIKE ? ESCAPE '\\')
       ORDER BY rel_path, version_no
     `),
     addCommand: db.prepare(
@@ -199,7 +262,8 @@ export function openDatabase(dataDir) {
         const type = versionNo === 1 && v.type === "changed" ? "added" : v.type;
         q.addVersion.run(
           deviceId, v.relPath, versionNo, type, v.size ?? null, v.sha256 ?? null,
-          v.mtimeMs ?? null, v.chunkIds ? JSON.stringify(v.chunkIds) : null, v.changeId, now()
+          v.mtimeMs ?? null, v.chunkIds ? JSON.stringify(v.chunkIds) : null, v.changeId, now(),
+          v.status ?? "ok", v.entropy ?? null, v.reasons?.length ? JSON.stringify(v.reasons) : null
         );
         db.exec("COMMIT");
         return versionNo;
@@ -224,6 +288,25 @@ export function openDatabase(dataDir) {
     startCommand: (id) => q.startCommand.run(now(), id),
     finishCommand: (id, status, result) => q.finishCommand.run(status, now(), JSON.stringify(result ?? null), id),
     listCommands: (limit = 20) => q.listCommands.all(limit),
+
+    // Quarantine engine
+    lastOkVersion: (deviceId, relPath) => q.lastOkVersion.get(deviceId, relPath),
+    countSince: (deviceId, sinceIso) => {
+      const r = q.countSince.get(deviceId, sinceIso);
+      return { suspicious: r.suspicious ?? 0, deleted: r.deleted ?? 0 };
+    },
+    // Deletions that led up to a mass-delete freeze are pulled back, so the files stay restorable
+    quarantineDeletesSince: (deviceId, sinceIso) => q.quarantineDeletesSince.run(deviceId, sinceIso).changes,
+    freezeDevice: (deviceId, reason) => q.freeze.run(now(), reason, deviceId).changes === 1,
+    unfreezeDevice: (deviceId) => q.unfreeze.run(now(), deviceId),
+    listQuarantine: (limit = 500) => q.listQuarantine.all(limit),
+    getVersion: (id) => q.getVersion.get(id),
+    reviewVersion: (id, status, by) => q.setVersionStatus.run(status, by, now(), id).changes === 1,
+    addAlert: (deviceId, kind, message) => Number(q.addAlert.run(deviceId, kind, message, now()).lastInsertRowid),
+    hasRecentOpenAlert: (deviceId, kind, sinceIso) => !!q.recentOpenAlert.get(deviceId, kind, sinceIso),
+    listAlerts: (limit = 100) => q.listAlerts.all(limit),
+    ackAlert: (id, by) => q.ackAlert.run(now(), by, id).changes === 1,
+    openAlertCount: () => q.openAlertCount.get().n,
 
     close: () => db.close(),
   };

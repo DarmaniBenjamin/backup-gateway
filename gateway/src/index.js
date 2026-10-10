@@ -7,6 +7,7 @@ import { openDatabase } from "./db.js";
 import { loadOrCreateGatewayKeys } from "./keys.js";
 import { createStorage } from "./storage.js";
 import { createServer } from "./server.js";
+import { createGuard } from "./guard.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -24,7 +25,8 @@ const keys = loadOrCreateGatewayKeys(config.dataDir);
 const storage = createStorage(config.dataDir);
 const store = openAdminStore(config.dataDir);
 
-const server = createServer({ db, keys, storage });
+const guard = createGuard({ db, config });
+const server = createServer({ db, keys, storage, guard });
 const adminServer = createAdminServer({ db, store, keys, storage, config });
 
 function onListenError(name, port) {

@@ -26,6 +26,12 @@ export function loadConfig() {
 
     dataDir,
     codeTtlMinutes: Number(process.env.GATEWAY_CODE_TTL_MINUTES || 60),
+
+    // Quarantine engine: freeze a device when this many suspicious files (or deletions)
+    // arrive within the window. While frozen, every change from it is quarantined.
+    freezeWindowMinutes: Number(process.env.GATEWAY_FREEZE_WINDOW_MINUTES || 10),
+    freezeSuspiciousFiles: Number(process.env.GATEWAY_FREEZE_SUSPICIOUS_FILES || 5),
+    freezeDeletedFiles: Number(process.env.GATEWAY_FREEZE_DELETED_FILES || 100),
   };
 
   if (config.adminPort === config.port) {
