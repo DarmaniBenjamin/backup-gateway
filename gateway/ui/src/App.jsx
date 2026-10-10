@@ -5,6 +5,8 @@ import { useAuth } from "./auth-context.js";
 import Layout from "./components/Layout.jsx";
 import Login from "./pages/Login.jsx";
 import ComingSoon from "./pages/ComingSoon.jsx";
+import Overview from "./pages/Overview.jsx";
+import Devices from "./pages/Devices.jsx";
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();
@@ -25,8 +27,8 @@ export default function App() {
           </RequireLogin>
         }
       >
-        <Route index element={<ComingSoon title="Overview" step="7c" />} />
-        <Route path="devices" element={<ComingSoon title="Devices" step="7c" />} />
+        <Route index element={<Overview />} />
+        <Route path="devices" element={<Devices />} />
         <Route path="restore" element={<ComingSoon title="Restore" step="7d" />} />
         <Route path="jobs" element={<ComingSoon title="Jobs" step="7e" />} />
         <Route path="integrity" element={<ComingSoon title="Integrity" step="7e" />} />
