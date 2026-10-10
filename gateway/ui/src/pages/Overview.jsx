@@ -8,26 +8,43 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import LoadState from "../components/LoadState.jsx";
 
 function Headline({ data }) {
-  const { total, online } = data.devices;
+  const { total, online, frozen } = data.devices;
   const offline = total - online;
   const lastBackup = data.deviceList.map((d) => d.lastBackupAt).filter(Boolean).sort().pop();
+  const plural = (n, one, many) => (n === 1 ? one : many);
 
+  // Most urgent first: a frozen device (possible attack) > files held for review > offline devices
   let text;
   let tone = "text-fg";
   if (total === 0) text = "No devices yet.";
-  else if (offline === 0) text = total === 1 ? "Your device is online." : `All ${total} devices are online.`;
+  else if (frozen > 0) {
+    tone = "text-alert";
+    text = `${frozen} ${plural(frozen, "device is", "devices are")} frozen.`;
+  } else if (data.quarantined > 0) {
+    tone = "text-series-quarantine";
+    text = `${data.quarantined} ${plural(data.quarantined, "file is", "files are")} waiting for review.`;
+  } else if (offline === 0) text = total === 1 ? "Your device is online." : `All ${total} devices are online.`;
   else {
     tone = "text-alert";
     text = offline === 1 ? `1 of ${total} devices is offline.` : `${offline} of ${total} devices are offline.`;
   }
 
+  const link = "text-signal underline-offset-2 hover:underline";
   return (
     <div className="mb-10">
       <h1 className={`text-3xl font-semibold tracking-tight sm:text-4xl ${tone}`}>{text}</h1>
       <p className="mt-3 text-dim">
         {total === 0 ? (
           <>
-            Add your first device from the <Link to="/devices" className="text-signal underline-offset-2 hover:underline">Devices</Link> page.
+            Add your first device from the <Link to="/devices" className={link}>Devices</Link> page.
+          </>
+        ) : frozen > 0 || data.quarantined > 0 ? (
+          <>
+            {frozen > 0
+              ? "Suspicious changes were caught and held back. Your good versions are safe and can be restored. "
+              : "The quarantine engine held back suspicious changes. "}
+            <Link to="/quarantine" className={link}>Review the quarantine</Link>
+            {offline > 0 && `. ${offline} of ${total} devices ${plural(offline, "is", "are")} offline`}.
           </>
         ) : (
           <>

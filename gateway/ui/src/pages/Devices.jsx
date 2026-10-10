@@ -58,6 +58,14 @@ function DeviceRow({ d }) {
           {formatSize(d.storedBytes)}
         </Field>
       </dl>
+      {d.status === "frozen" && (
+        <p className="text-sm text-alert md:col-span-6">
+          Frozen {timeAgo(d.frozenAt)}: {d.frozenReason}.{" "}
+          <Link to="/quarantine" className="text-signal underline-offset-2 hover:underline">
+            Review and unfreeze
+          </Link>
+        </p>
+      )}
       {!d.encryptionReady && (
         <p className="text-sm text-signal md:col-span-6">
           Waiting for this device to finish setting up encryption. Start its agent.

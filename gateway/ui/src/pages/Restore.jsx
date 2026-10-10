@@ -2,8 +2,8 @@
 // files as they were at that moment, and restore a file, a folder or everything.
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
-import { History } from "lucide-react";
+import { Link, useSearchParams } from "react-router";
+import { History, Snowflake } from "lucide-react";
 import { api } from "../api.js";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize } from "../format.js";
@@ -100,6 +100,20 @@ export default function Restore() {
           ))}
         </select>
       </div>
+
+      {device?.status === "frozen" && (
+        <div className="mb-8 flex gap-3 rounded-lg border border-alert/40 bg-alert/10 px-4 py-3 text-sm">
+          <Snowflake size={18} className="mt-0.5 shrink-0 text-alert" aria-hidden="true" />
+          <p>
+            <span className="font-medium text-fg">This device is frozen.</span>{" "}
+            <span className="text-dim">
+              Restores still work and only ever use good versions, so &ldquo;Restore all files&rdquo; with no restore point picked
+              puts everything back the way it was before the attack. Review what was caught on the{" "}
+              <Link to="/quarantine" className="text-signal underline-offset-2 hover:underline">Quarantine</Link> page.
+            </span>
+          </p>
+        </div>
+      )}
 
       {/* 1. Activity: find the moment to go back to */}
       <section className="mb-8 rounded-lg border border-edge bg-surface p-5">
@@ -204,8 +218,8 @@ export default function Restore() {
                   <tr key={`${r.path}-${r.versionNo}`}>
                     <td className="whitespace-nowrap px-4 py-2 text-dim">{formatDateTime(r.at)}</td>
                     <td className="max-w-xs truncate px-4 py-2 font-mono text-xs">{r.path}</td>
-                    <td className={`px-4 py-2 ${TYPE_STYLE[r.type]}`}>
-                      {r.type} (v{r.versionNo})
+                    <td className={`px-4 py-2 ${r.status === "ok" ? TYPE_STYLE[r.type] : "text-series-quarantine"}`}>
+                      {r.type} (v{r.versionNo}){r.status !== "ok" && `, ${r.status}`}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2 text-right text-dim">{r.type === "deleted" ? "" : formatSize(r.size)}</td>
                   </tr>

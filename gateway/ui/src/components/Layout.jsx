@@ -1,21 +1,27 @@
 // App frame: sidebar navigation on the left (a drop-down menu on phones) and the page on the right.
+// Alerts are checked here for every page: they appear as a banner above the page and as a count
+// next to "Quarantine" in the menu. Pages get the alerts (and a refresh function) through the
+// router's outlet context.
 
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
-import { HardDrive, History, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText, ShieldCheck, X } from "lucide-react";
+import { HardDrive, History, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { useAuth } from "../auth-context.js";
+import { usePolling } from "../usePolling.js";
 import Logo from "./Logo.jsx";
+import AlertBanner from "./AlertBanner.jsx";
 
 const NAV = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/devices", label: "Devices", icon: HardDrive },
   { to: "/restore", label: "Restore", icon: History },
+  { to: "/quarantine", label: "Quarantine", icon: ShieldAlert, badge: "alerts" },
   { to: "/jobs", label: "Jobs", icon: ListChecks },
   { to: "/integrity", label: "Integrity", icon: ShieldCheck },
   { to: "/audit", label: "Audit log", icon: ScrollText },
 ];
 
-function NavItem({ item, onNavigate }) {
+function NavItem({ item, onNavigate, count }) {
   const Icon = item.icon;
   return (
     <NavLink
@@ -33,6 +39,11 @@ function NavItem({ item, onNavigate }) {
         <>
           <Icon size={18} className={isActive ? "text-signal" : ""} aria-hidden="true" />
           {item.label}
+          {count > 0 && (
+            <span className="ml-auto rounded-full bg-alert px-2 py-0.5 text-xs font-medium text-night" aria-label={`${count} open alert${count === 1 ? "" : "s"}`}>
+              {count}
+            </span>
+          )}
         </>
       )}
     </NavLink>
@@ -43,13 +54,15 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
+  const { data: alerts, reload: reloadAlerts } = usePolling("/alerts", 15000);
+  const openAlerts = (alerts ?? []).filter((a) => !a.acknowledgedAt).length;
 
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
   const nav = (
     <nav className="flex flex-col gap-1" aria-label="Main">
       {NAV.map((item) => (
-        <NavItem key={item.to} item={item} onNavigate={() => setMenuOpen(false)} />
+        <NavItem key={item.to} item={item} count={item.badge ? openAlerts : 0} onNavigate={() => setMenuOpen(false)} />
       ))}
     </nav>
   );
@@ -97,9 +110,12 @@ export default function Layout() {
             onClick={() => setMenuOpen((o) => !o)}
             aria-expanded={menuOpen}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
-            className="flex h-10 w-10 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg"
+            className="relative flex h-10 w-10 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg"
           >
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
+            {!menuOpen && openAlerts > 0 && (
+              <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-alert ring-2 ring-surface" aria-hidden="true" />
+            )}
           </button>
         </div>
         {menuOpen && (
@@ -111,7 +127,10 @@ export default function Layout() {
       </header>
 
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 sm:py-8">
-        <Outlet />
+        <div className="mx-auto max-w-6xl">
+          <AlertBanner alerts={alerts} onChange={reloadAlerts} />
+        </div>
+        <Outlet context={{ alerts, reloadAlerts }} />
       </main>
     </div>
   );

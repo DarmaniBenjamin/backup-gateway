@@ -1,5 +1,6 @@
-// Backup activity over time: one bar per time slot, showing how many files were added/changed
-// and deleted. A ransomware attack shows up as a sudden tall bar.
+// Backup activity over time: one bar per time slot, showing how many files were added/changed,
+// deleted, and held back by the quarantine engine. A ransomware attack shows up as a sudden
+// tall bar, mostly in the quarantine colour.
 // Hover a bar to see its numbers; click it to restore to just before that moment.
 
 import { useMemo, useState } from "react";
@@ -7,7 +8,14 @@ import { useMemo, useState } from "react";
 const HEIGHT = 150;
 const GAP = 2; // surface gap between bars and between stacked segments
 
-// A bar whose top corners are rounded and whose bottom sits flat on the baseline
+// Stacked bottom to top. Only the top segment of each bar gets rounded corners.
+const SERIES = [
+  { key: "change", label: "Added or changed", fill: "var(--color-series-change)", swatch: "bg-series-change", value: (b) => b.added + b.changed },
+  { key: "delete", label: "Deleted", fill: "var(--color-series-delete)", swatch: "bg-series-delete", value: (b) => b.deleted },
+  { key: "quarantine", label: "Quarantined", fill: "var(--color-series-quarantine)", swatch: "bg-series-quarantine", value: (b) => b.quarantined ?? 0 },
+];
+
+// A bar whose top corners are rounded and whose bottom sits flat
 function topRoundedRect(x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h);
   return `M${x},${y + h} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + w - rr} Q${x + w},${y} ${x + w},${y + rr} V${y + h} Z`;
@@ -31,7 +39,7 @@ export default function ActivityChart({ buckets, bucketMinutes, selectedAt, onSe
   const [hover, setHover] = useState(null);
 
   const { max, slot } = useMemo(() => {
-    const totals = buckets.map((b) => b.added + b.changed + b.deleted);
+    const totals = buckets.map((b) => SERIES.reduce((n, s) => n + s.value(b), 0));
     return { max: niceMax(Math.max(0, ...totals)), slot: 10 };
   }, [buckets]);
 
@@ -75,26 +83,23 @@ export default function ActivityChart({ buckets, bucketMinutes, selectedAt, onSe
             {buckets.map((b, i) => {
               const x = i * slot + GAP / 2;
               const w = slot - GAP;
-              const changes = b.added + b.changed;
-              const hChange = scale(changes);
-              const hDelete = scale(b.deleted);
-              const deleteTop = HEIGHT - hChange - (hChange > 0 && hDelete > 0 ? GAP : 0) - hDelete;
+              const parts = SERIES.map((s) => ({ ...s, h: scale(s.value(b)) })).filter((p) => p.h > 0);
+              let top = HEIGHT;
               return (
                 <g key={b.start}>
-                  {hChange > 0 && (
-                    <path
-                      d={topRoundedRect(x, HEIGHT - hChange, w, hChange, hDelete > 0 ? 0 : 3)}
-                      fill="var(--color-series-change)"
-                      opacity={hover == null || hover === i ? 1 : 0.55}
-                    />
-                  )}
-                  {hDelete > 0 && (
-                    <path
-                      d={topRoundedRect(x, deleteTop, w, hDelete, 3)}
-                      fill="var(--color-series-delete)"
-                      opacity={hover == null || hover === i ? 1 : 0.55}
-                    />
-                  )}
+                  {parts.map((p, n) => {
+                    if (n > 0) top -= GAP; // surface gap between stacked segments
+                    top -= p.h;
+                    const isTop = n === parts.length - 1;
+                    return (
+                      <path
+                        key={p.key}
+                        d={topRoundedRect(x, top, w, p.h, isTop ? 3 : 0)}
+                        fill={p.fill}
+                        opacity={hover == null || hover === i ? 1 : 0.55}
+                      />
+                    );
+                  })}
                   {i === selectedIndex && (
                     <line x1={i * slot} x2={i * slot} y1="0" y2={HEIGHT} stroke="var(--color-signal)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
                   )}
@@ -122,20 +127,15 @@ export default function ActivityChart({ buckets, bucketMinutes, selectedAt, onSe
               }}
             >
               <p className="font-medium text-fg">{formatSlot(hovered.start, bucketMinutes)}</p>
-              <p className="mt-1.5 flex items-center justify-between text-dim">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-sm bg-series-change" />
-                  Added or changed
-                </span>
-                <span className="text-fg">{hovered.added + hovered.changed}</span>
-              </p>
-              <p className="mt-1 flex items-center justify-between text-dim">
-                <span className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-sm bg-series-delete" />
-                  Deleted
-                </span>
-                <span className="text-fg">{hovered.deleted}</span>
-              </p>
+              {SERIES.map((s, n) => (
+                <p key={s.key} className={`${n === 0 ? "mt-1.5" : "mt-1"} flex items-center justify-between text-dim`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-sm ${s.swatch}`} />
+                    {s.label}
+                  </span>
+                  <span className="text-fg">{s.value(hovered)}</span>
+                </p>
+              ))}
               <p className="mt-2 text-dim">Click to restore to just before this.</p>
             </div>
           )}
@@ -157,14 +157,12 @@ export default function ActivityChart({ buckets, bucketMinutes, selectedAt, onSe
       </div>
 
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-dim">
-        <span className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-sm bg-series-change" aria-hidden="true" />
-          Added or changed
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-sm bg-series-delete" aria-hidden="true" />
-          Deleted
-        </span>
+        {SERIES.map((s) => (
+          <span key={s.key} className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-sm ${s.swatch}`} aria-hidden="true" />
+            {s.label}
+          </span>
+        ))}
         <span className="flex items-center gap-2">
           <span className="h-3 w-0.5 bg-signal" aria-hidden="true" />
           Restore point
