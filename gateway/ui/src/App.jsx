@@ -7,6 +7,7 @@ import Login from "./pages/Login.jsx";
 import ComingSoon from "./pages/ComingSoon.jsx";
 import Overview from "./pages/Overview.jsx";
 import Devices from "./pages/Devices.jsx";
+import Restore from "./pages/Restore.jsx";
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();
@@ -29,7 +30,7 @@ export default function App() {
       >
         <Route index element={<Overview />} />
         <Route path="devices" element={<Devices />} />
-        <Route path="restore" element={<ComingSoon title="Restore" step="7d" />} />
+        <Route path="restore" element={<Restore />} />
         <Route path="jobs" element={<ComingSoon title="Jobs" step="7e" />} />
         <Route path="integrity" element={<ComingSoon title="Integrity" step="7e" />} />
         <Route path="audit" element={<ComingSoon title="Audit log" step="7e" />} />

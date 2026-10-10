@@ -47,3 +47,10 @@
     }
   }
 }
+
+/* Chart colours — validated for colour-blind separation and contrast on the dark surface.
+   Amber (signal) is never used for data: it only marks the restore point you pick. */
+@theme {
+  --color-series-change: #3987e5; /* files added or changed */
+  --color-series-delete: #d55181; /* files deleted */
+}
