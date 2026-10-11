@@ -51,7 +51,7 @@ import {
 import { SettingsError, cleanSettings, settingsOf } from "../device-settings.js";
 import { CloudError, cleanCloudSettings, testCloud, PROVIDERS } from "../cloud/offsite.js";
 import { CopyError } from "../cloud/copies.js";
-import { startSignIn, finishSignIn, explainDrive } from "../cloud/gdrive.js";
+import { startSignIn, finishSignIn, explainDrive, createDrive } from "../cloud/gdrive.js";
 import { cleanDestinations } from "../cloud/routing.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
@@ -504,7 +504,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         offsite: {
           copies: copies.forDevice(d.id),
           failsafe: !!copies.failsafe(),
-          google: { clientId: copies.googleClient()?.clientId ?? null },
+          google: googlePublic(),
         },
       };
     },
@@ -774,20 +774,36 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     const loopback = /^(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(h) ? h.replace(/^localhost/, "127.0.0.1") : `127.0.0.1:${config.adminPort}`;
     return `http://${loopback}/admin/oauth/google`;
   }
-  let newRecoveryKey = null; // after a Google sign-in made the first copy: shown once on the Off-site page
+  // The Google sign-in setup (made once in Google Cloud), as the web UI may see it: never the secret
+  function googlePublic(host) {
+    const g = copies.googleClient();
+    return {
+      configured: !!(g?.clientId && g?.clientSecret),
+      clientId: g?.clientId ?? null,
+      apiKey: g?.apiKey ?? null,
+      projectNumber: g?.projectNumber ?? null,
+      picker: !!(g?.apiKey && g?.projectNumber), // picking a folder already in the Drive
+      redirectUri: redirectUriFor(host),
+    };
+  }
+  // Signed in to Google, waiting for the person to choose the folder (30 minutes at most).
+  // The sign-in stays in memory only, until the folder is chosen.
+  const pendingDrives = new Map(); // id -> { sign, deviceId, admin, email, expires }
+  function pendingOr404(id) {
+    for (const [k, v] of pendingDrives) if (v.expires < Date.now()) pendingDrives.delete(k);
+    const p = pendingDrives.get(String(id));
+    if (!p) throw new ApiError(404, "That Google sign-in expired. Sign in again.");
+    return p;
+  }
 
   Object.assign(routes, {
     "GET /cloud"({ host }) {
-      const key = newRecoveryKey;
-      newRecoveryKey = null;
-      const google = copies.googleClient();
       return {
         recoveryFingerprint: copies.recovery()?.fingerprint ?? null,
         failsafe: copies.failsafe(),
         copies: copies.list().filter((c) => !c.failsafe),
         providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, { label: v.label }])),
-        google: { redirectUri: redirectUriFor(host), clientId: google?.clientId ?? null },
-        ...(key ? { newRecoveryKey: key } : {}),
+        google: googlePublic(host),
       };
     },
 
@@ -816,26 +832,82 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       return result;
     },
 
-    // Google Drive: returns the Google address to send the browser to
+    // The Google sign-in setup, made once in Google Cloud (see the Off-site page). Leave the
+    // secret empty to keep the saved one.
+    "POST /cloud/google"({ body, admin, ip, host }) {
+      const known = copies.googleClient();
+      const clientId = String(body.clientId ?? "").trim();
+      const secretTyped = String(body.clientSecret ?? "").trim();
+      const clientSecret = secretTyped || (clientId === known?.clientId ? known?.clientSecret : "");
+      const apiKey = String(body.apiKey ?? "").trim() || null;
+      const projectNumber = String(body.projectNumber ?? "").trim() || null;
+      if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(clientId)) throw new ApiError(400, "Enter the client ID. It ends with .apps.googleusercontent.com");
+      if (!clientSecret || clientSecret.length > 200 || /\s/.test(clientSecret)) throw new ApiError(400, "Enter the client secret.");
+      if (apiKey && !/^[\w-]{20,100}$/.test(apiKey)) throw new ApiError(400, "That doesn't look like an API key (it starts with AIza).");
+      if (projectNumber && !/^\d{5,20}$/.test(projectNumber)) throw new ApiError(400, "The project number is digits only (not the project ID).");
+      copies.setGoogleClient({ clientId, clientSecret, apiKey, projectNumber });
+      store.audit(admin.username, "cloud.google-setup-saved", { clientId, picker: !!(apiKey && projectNumber) }, ip);
+      return googlePublic(host);
+    },
+
+    // Google Drive: returns the Google sign-in address to send the browser to
     "POST /cloud/drive/start"({ body, admin, host }) {
       const deviceId = scopeOf(body);
       const resign = body.resign ? copyOr404(String(body.resign)) : null;
       if (resign && resign.kind !== "drive") throw new ApiError(400, "That copy isn't a Google Drive.");
-      const known = copies.googleClient();
-      const clientId = String(body.clientId ?? "").trim() || known?.clientId || "";
-      const clientSecret = String(body.clientSecret ?? "").trim() || (clientId === known?.clientId ? known.clientSecret : "");
-      if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(clientId)) throw new ApiError(400, "Enter the client ID. It ends with .apps.googleusercontent.com");
-      if (!clientSecret || clientSecret.length > 200 || /\s/.test(clientSecret)) throw new ApiError(400, "Enter the client secret.");
+      const g = copies.googleClient();
+      if (!g?.clientId || !g?.clientSecret) throw new ApiError(409, "Set up Google sign-in first, on the Off-site page (once).");
       if (!deviceId && !resign && copies.failsafe()) throw new ApiError(409, "There's already a failsafe copy. Disconnect it first to switch.");
       const redirectUri = redirectUriFor(host);
-      const { url, state, verifier } = startSignIn({ clientId, redirectUri });
+      const { url, state, verifier } = startSignIn({ clientId: g.clientId, redirectUri });
       for (const [k, v] of signIns) if (v.expires < Date.now()) signIns.delete(k);
       const owner = resign?.deviceId ?? deviceId;
       signIns.set(state, {
-        verifier, clientId, clientSecret, redirectUri, admin: admin.username, deviceId, resign: resign?.id ?? null,
+        verifier, clientId: g.clientId, clientSecret: g.clientSecret, redirectUri, admin: admin.username, deviceId, resign: resign?.id ?? null,
         back: owner ? `/devices/${owner}` : "/offsite", expires: Date.now() + 10 * 60_000,
       });
       return { url };
+    },
+
+    // After signing in: who it is, and what the folder chooser needs
+    "GET /cloud/drive/pending/:id"({ params }) {
+      const p = pendingOr404(params.id);
+      return { email: p.email, deviceId: p.deviceId, defaultName: copies.defaultFolderName(p.deviceId), picker: googlePublic().picker };
+    },
+
+    // For the Google folder picker window: a short-lived token that can only reach files the
+    // gateway made or the person picks (drive.file)
+    async "POST /cloud/drive/pending/:id/picker"({ params }) {
+      const p = pendingOr404(params.id);
+      const g = copies.googleClient();
+      if (!g?.apiKey || !g?.projectNumber) throw new ApiError(409, "Add the API key and project number in the Google sign-in setup to pick folders.");
+      try {
+        return { accessToken: await createDrive(p.sign).token(), apiKey: g.apiKey, appId: g.projectNumber };
+      } catch (err) {
+        throw new ApiError(502, explainDrive(err));
+      }
+    },
+
+    // The folder is chosen: a new one ({ name, parentId? }) or one already there ({ folderId })
+    async "POST /cloud/drive/pending/:id/finish"({ params, body, ip }) {
+      const p = pendingOr404(params.id);
+      const place = body.folderId ? { folderId: String(body.folderId) } : { name: body.name, parentId: body.parentId ? String(body.parentId) : null };
+      let result;
+      try {
+        result = await copies.addDrive(p.sign, p.deviceId, p.admin, place);
+      } catch (err) {
+        if (err instanceof CopyError) throw new ApiError(409, err.message);
+        throw new ApiError(502, explainDrive(err));
+      }
+      pendingDrives.delete(String(params.id));
+      const c = copies.get(result.id);
+      store.audit(p.admin, "cloud.connected", { for: where(c), provider: "Google Drive", email: result.email, folder: result.folderName, recoveryKey: result.fingerprint }, ip);
+      return result;
+    },
+
+    "POST /cloud/drive/pending/:id/cancel"({ params }) {
+      pendingDrives.delete(String(params.id));
+      return { ok: true };
     },
 
     async "POST /cloud/:id/key"({ params, body, admin, ip }) {
@@ -894,18 +966,16 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     try {
       const refreshToken = await finishSignIn({ ...pending, code: String(query.code ?? "") });
       const sign = { clientId: pending.clientId, clientSecret: pending.clientSecret, refreshToken };
-      copies.rememberGoogleClient(pending.clientId, pending.clientSecret);
       if (pending.resign) {
         await copies.resignDrive(pending.resign, sign);
         store.audit(pending.admin, "cloud.drive-signed-in-again", { copy: pending.resign }, ip);
         return back("drive=signed-in");
       }
-      const result = await copies.addDrive(sign, pending.deviceId, pending.admin);
-      const c = copies.get(result.id);
-      if (result.recoveryKey) newRecoveryKey = { recoveryKey: result.recoveryKey, fingerprint: result.fingerprint };
-      store.audit(pending.admin, "cloud.connected", { for: where(c), provider: "Google Drive", email: result.email, recoveryKey: result.fingerprint }, ip);
-      // The very first copy made the recovery key: show it on the Off-site page
-      return result.recoveryKey ? "/offsite?drive=connected" : back("drive=connected");
+      // Next the person chooses the folder (see /cloud/drive/pending)
+      const { email } = await createDrive(sign).about();
+      const id = crypto.randomBytes(12).toString("base64url");
+      pendingDrives.set(id, { sign, deviceId: pending.deviceId, admin: pending.admin, email, expires: Date.now() + 30 * 60_000 });
+      return back(`drive_choose=${id}`);
     } catch (err) {
       log.warn(`Google Drive sign-in failed: ${err.message}`);
       return back("drive_error=" + encodeURIComponent(err instanceof CopyError ? err.message : explainDrive(err)));

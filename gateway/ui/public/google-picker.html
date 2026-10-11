@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Choose a Google Drive folder</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0b0a1a; color: #eeeef8; font: 15px/1.5 system-ui, sans-serif; }
+      main { max-width: 32rem; margin: 0 auto; padding: 3rem 1.5rem; }
+      p { margin: 0 0 1rem; }
+      .dim { color: #9c9abb; }
+      .error { color: #ff6b81; }
+      button { font: inherit; color: #120c38; background: #8b7cff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p id="status">Opening Google Drive…</p>
+      <p class="dim" id="hint">Choose a folder in the Google window. This window closes by itself afterwards.</p>
+      <p><button type="button" id="close" hidden>Close this window</button></p>
+    </main>
+    <script src="/google-picker.js"></script>
+  </body>
+</html>

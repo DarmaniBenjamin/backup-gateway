@@ -296,13 +296,28 @@ export function createCopies({ db, dataDir, storage }) {
 
   // ---- Google Drive ---------------------------------------------------------------------------
 
-  async function driveFolders(drive, d) {
-    const who = d.device_id ? q.device.get(d.device_id) : null;
-    const name = who ? `Backup Gateway - ${who.client_name} - ${who.device_name}` : "Backup Gateway - failsafe (all devices)";
-    const root = await drive.createFolder(name, null, { backupGateway: "root" });
-    const packs = await drive.createFolder("packs", root, { backupGateway: "packs" });
-    const catalogs = await drive.createFolder("catalogs", root, { backupGateway: "catalogs" });
-    return { rootId: root, packsId: packs, catalogsId: catalogs };
+  // The name a new folder gets unless the person types another
+  function defaultFolderName(deviceId) {
+    const who = deviceId ? q.device.get(deviceId) : null;
+    return who ? `Backup Gateway - ${who.client_name} - ${who.device_name}` : "Backup Gateway - failsafe (all devices)";
+  }
+
+  // The copy's folder in Drive, and its "packs" and "catalogs" folders inside. place is one of:
+  //   { folderId }        a folder the person picked (one already in the Drive)
+  //   { name, parentId }  a new folder, in My Drive or inside a picked folder
+  // The gateway's own sub-folders are reused if they're already there (the same folder chosen again).
+  async function driveFolders(drive, place) {
+    let root;
+    let folderName;
+    if (place.folderId) {
+      ({ id: root, name: folderName } = await drive.folder(place.folderId));
+    } else {
+      if (place.parentId) await drive.folder(place.parentId); // still there, and a folder
+      folderName = place.name;
+      root = await drive.createFolder(place.name, place.parentId ?? null, { backupGateway: "root" });
+    }
+    const sub = async (kind) => (place.folderId && (await drive.findChild(root, kind))) || drive.createFolder(kind, root, { backupGateway: kind });
+    return { rootId: root, folderName, packsId: await sub("packs"), catalogsId: await sub("catalogs") };
   }
 
   const driveDriver = {
@@ -314,7 +329,7 @@ export function createCopies({ db, dataDir, storage }) {
       if (!full || (await drive.exists(d.settings.rootId))) return d;
       log.warn(`Off-site (${label(d)}): its folder is gone from Google Drive. Uploading everything again into a new folder.`);
       raise(d, "Its folder on Google Drive was deleted or moved to the bin. Everything is being uploaded again.");
-      const folders = await driveFolders(drive, d);
+      const folders = await driveFolders(drive, { name: d.settings.folderName || defaultFolderName(d.device_id) });
       forgetUploads(d.id);
       q.setSettings.run(JSON.stringify({ ...d.settings, ...folders }), d.id);
       return getDest(d.id);
@@ -463,7 +478,7 @@ export function createCopies({ db, dataDir, storage }) {
       client: who?.client_name ?? null,
       ...(d.kind === "s3"
         ? { providerLabel: PROVIDERS[s.provider]?.label ?? s.provider, endpoint: s.endpoint, bucket: s.bucket, keyId: s.keyId, lockMode: s.lockMode, retentionDays: s.retentionDays }
-        : { email: s.email, clientId: s.clientId }),
+        : { email: s.email, folderName: s.folderName ?? null, folderId: s.rootId ?? null }),
       paused: !!d.paused,
       connectedAt: d.connected_at,
       connectedBy: d.connected_by,
@@ -525,17 +540,27 @@ export function createCopies({ db, dataDir, storage }) {
       return add("s3", deviceId, settings, admin);
     },
 
-    // A Google sign-in: makes the copy's folder in that Drive and checks a small file goes up,
-    // comes back the same, and can be cleaned away, before the copy is saved
-    async addDrive({ clientId, clientSecret, refreshToken }, deviceId, admin) {
+    // A Google sign-in plus the folder chosen for it: sets up the folder and checks a small file
+    // goes up, comes back the same, and can be cleaned away, before the copy is saved
+    async addDrive({ clientId, clientSecret, refreshToken }, deviceId, admin, place) {
       if (!deviceId && q.get.get("failsafe")) throw new CopyError("There's already a failsafe copy. Disconnect it first to switch.");
       if (deviceId && !q.device.get(deviceId)) throw new CopyError("That device doesn't exist.");
+      if (!place?.folderId) {
+        const name = String(place?.name ?? "").trim();
+        if (!name || name.length > 200 || /[\\/]/.test(name)) throw new CopyError("Type a folder name (no slashes).");
+        place = { name, parentId: place?.parentId || null };
+      }
+      if (place.folderId && list().some((x) => x.kind === "drive" && x.settings.rootId === place.folderId)) {
+        throw new CopyError("Another off-site copy already uses that folder. Choose a different one, or make a new folder.");
+      }
       const drive = createDrive({ clientId, clientSecret, refreshToken });
       const about = await drive.about();
-      const folders = await driveFolders(drive, { device_id: deviceId });
+      const folders = await driveFolders(drive, place);
       await testDrive(drive, folders.rootId);
-      return { ...add("drive", deviceId, { clientId, clientSecret, refreshToken, email: about.email, ...folders }, admin), email: about.email };
+      return { ...add("drive", deviceId, { clientId, clientSecret, refreshToken, email: about.email, ...folders }, admin), email: about.email, folderName: folders.folderName };
     },
+
+    defaultFolderName,
 
     // Signed in again (the Google sign-in expired or was removed): same copy, new token
     async resignDrive(id, { clientId, clientSecret, refreshToken }) {
@@ -576,13 +601,14 @@ export function createCopies({ db, dataDir, storage }) {
       states.delete(id);
     },
 
-    // The Google OAuth client (ID and secret) used last, so it's typed in once
+    // The Google sign-in setup (OAuth client, and the API key and project number for the folder
+    // picker), made once in Google Cloud
     googleClient() {
       const v = meta("google_client");
       return v ? JSON.parse(v) : null;
     },
-    rememberGoogleClient(clientId, clientSecret) {
-      q.setMeta.run("google_client", JSON.stringify({ clientId, clientSecret }));
+    setGoogleClient(g) {
+      q.setMeta.run("google_client", JSON.stringify(g));
     },
 
     pass,

@@ -31,6 +31,18 @@ const SECURITY_HEADERS = {
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
 
+// The Google folder picker window (google-picker.html) is the ONE page allowed to load Google's
+// script: it runs in its own small window, so the rest of the admin UI keeps the strict policy above.
+const PICKER_HEADERS = {
+  ...SECURITY_HEADERS,
+  "Content-Security-Policy":
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://apis.google.com https://www.gstatic.com; " +
+    "font-src 'self'; script-src 'self' https://apis.google.com https://www.gstatic.com; " +
+    "frame-src https://docs.google.com https://drive.google.com; connect-src 'self' https://apis.google.com https://www.googleapis.com; " +
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  "Referrer-Policy": "strict-origin",
+};
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -153,7 +165,7 @@ function serveStatic(req, res, pathname) {
   const file = loadStatic(filePath);
   const ext = path.extname(filePath);
   const headers = {
-    ...SECURITY_HEADERS,
+    ...(path.basename(filePath) === "google-picker.html" ? PICKER_HEADERS : SECURITY_HEADERS),
     "Content-Type": MIME[ext] ?? "application/octet-stream",
     "Cache-Control": filePath.includes(`${path.sep}assets${path.sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
     ETag: file.etag,

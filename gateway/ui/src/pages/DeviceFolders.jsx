@@ -70,7 +70,7 @@ function FolderCopies({ deviceId, folder, copies, onChanged }) {
             title={active ? "Goes to this copy. Click to stop sending this folder there." : "Not sent to this copy. Click to send it."}
             className={`rounded-full border px-2.5 py-0.5 ${active ? "border-secure/50 bg-secure/10 text-secure" : "border-edge text-dim line-through"}`}
           >
-            {c.kind === "s3" ? c.bucket : `Google Drive ${c.email}`}
+            {c.kind === "s3" ? c.bucket : `Google Drive: ${c.folderName ?? c.email}`}
           </button>
         );
       })}

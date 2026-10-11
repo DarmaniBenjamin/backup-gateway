@@ -73,7 +73,16 @@ if (fromFolder) {
       else if (e.isFile() && e.name.endsWith(".bin")) files.set(e.name, p);
     }
   };
-  walk(fromFolder);
+  // The copy's own "catalogs" and "packs" folders if they're right there (another copy made inside
+  // this folder is left alone); otherwise everything, wherever the download put it
+  const own = ["catalogs", "packs"].map((n) => path.join(fromFolder, n));
+  if (own.every((d) => fs.statSync(d, { throwIfNoEntry: false })?.isDirectory())) own.forEach(walk);
+  else walk(fromFolder);
+  // One copy per run: a folder holding two copies (one made inside another) has to be narrowed down
+  const catalogDirs = [...new Set([...files].filter(([n]) => n.startsWith("catalog-")).map(([, p]) => path.dirname(p)))];
+  if (catalogDirs.length > 1) {
+    fail(`That folder holds more than one off-site copy. Point --from-folder at just one of these:\n  ${catalogDirs.map((d) => path.dirname(d)).join("\n  ")}`);
+  }
   const handles = new Map();
   source = {
     catalogs: async () => [...files.keys()].filter((n) => n.startsWith("catalog-")),

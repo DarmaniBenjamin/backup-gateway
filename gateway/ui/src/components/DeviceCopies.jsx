@@ -5,12 +5,12 @@ import { useState } from "react";
 import { Cloud, HardDrive, ShieldCheck } from "lucide-react";
 import Modal from "./Modal.jsx";
 import { secondaryButton } from "./buttons.js";
-import { CopyCard, DriveSignIn, Note, RecoveryKeyDialog, S3Form, useDriveReturn } from "./OffsiteParts.jsx";
+import { CopyCard, DriveReturn, DriveSignIn, Note, RecoveryKeyDialog, S3Form, useDriveReturn } from "./OffsiteParts.jsx";
 
 export default function DeviceCopies({ device, offsite, onChanged }) {
   const [adding, setAdding] = useState(null); // "s3" | "drive"
   const [keyShown, setKeyShown] = useState(null);
-  const note = useDriveReturn();
+  const { note, choose } = useDriveReturn();
 
   return (
     <section className="mb-10">
@@ -26,6 +26,7 @@ export default function DeviceCopies({ device, offsite, onChanged }) {
         )}
       </p>
       <Note note={note} />
+      <DriveReturn choose={choose} onChanged={onChanged} />
       <div className="space-y-4">
         {offsite.copies.map((c) => (
           <CopyCard key={c.id} s={c} google={offsite.google} onChanged={onChanged} />
@@ -60,8 +61,7 @@ export default function DeviceCopies({ device, offsite, onChanged }) {
       {adding === "drive" && (
         <Modal title={`A Google Drive for ${device.name}`} onClose={() => setAdding(null)} wide>
           <p className="mb-4 text-sm text-dim">
-            Sign in with the Google account whose Drive should hold this device&rsquo;s copy. The gateway makes its own folder there
-            and can only see the files it makes.
+            Sign in with the Google account whose Drive should hold this device&rsquo;s copy, then choose the folder.
           </p>
           <DriveSignIn deviceId={device.id} google={offsite.google} />
         </Modal>

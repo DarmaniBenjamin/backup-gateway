@@ -142,6 +142,27 @@ export function createDrive({ clientId, clientSecret, refreshToken }) {
       }
     },
 
+    // A folder the person picked (or the gateway made): its name, and whether it really is a folder
+    async folder(id) {
+      const res = await call(`${GOOGLE.api}/files/${encodeURIComponent(id)}?fields=id,name,mimeType,trashed`, { headers: await auth() }, 30_000);
+      const f = await res.json();
+      if (f.mimeType !== FOLDER) throw new DriveError(400, "That's a file, not a folder. Choose a folder.");
+      if (f.trashed) throw new DriveError(400, "That folder is in the bin. Choose another one.");
+      return { id: f.id, name: f.name };
+    },
+
+    // A folder the gateway made earlier inside `parentId` (marked with appProperties), if any
+    async findChild(parentId, kind) {
+      const q = `'${String(parentId).replace(/'/g, "\\'")}' in parents and trashed = false and mimeType = '${FOLDER}' and appProperties has { key='backupGateway' and value='${kind}' }`;
+      const res = await call(`${GOOGLE.api}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1`, { headers: await auth() }, 30_000);
+      return (await res.json()).files?.[0]?.id ?? null;
+    },
+
+    // A short-lived token for the Google folder picker in the browser (drive.file only)
+    async token() {
+      return accessToken();
+    },
+
     // Upload a file in one go (resumable upload: works for any size, two requests)
     async upload(name, parentId, data, appProperties = {}) {
       const start = await call(`${GOOGLE.upload}/files?uploadType=resumable&fields=id`, {

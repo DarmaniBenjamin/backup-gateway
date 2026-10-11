@@ -81,16 +81,23 @@ storage). Backups are locked there for the number of days you choose, so nobody 
 them before then: not ransomware, not someone with the gateway's key. Google Drive can't lock files,
 so use a locked bucket as the failsafe.
 
-### Google Drive (one-time setup)
+### Google Drive
 
-1. In https://console.cloud.google.com make a project, then in **APIs & Services > Library** turn on
-   the **Google Drive API**.
-2. **OAuth consent screen**: External, fill in the app name and your email, then **Publish app**
-   (status "In production"). In "Testing", Google drops the sign-in after 7 days.
-3. **Credentials > Create credentials > OAuth client ID**, type **Desktop app**. Copy the client ID
-   and client secret.
-4. On a device's page, **Add a Google Drive**, paste them, and sign in with the Google account. The
-   gateway only gets access to the files it creates itself (drive.file), nothing else in the account.
+Set up Google sign-in once (Off-site page, **Google sign-in setup**). In https://console.cloud.google.com:
+
+1. Make a project. In **APIs & Services > Library**, turn on the **Google Drive API** and the
+   **Google Picker API**.
+2. **Google Auth Platform**: External, app name and your email; then under **Audience** click
+   **Publish app** ("In production"). In "Testing", Google drops the sign-in after 7 days.
+3. **Clients > Create client**, type **Desktop app**. Copy the client ID and client secret.
+4. **APIs & Services > Credentials > Create credentials > API key**, restricted to the Google Picker
+   API. Copy it, and the **project number** from the project's dashboard.
+
+After that, adding a Google Drive (to the failsafe or a device) is: **Sign in with Google**, then
+choose where the backups go: a new folder (in My Drive or inside a folder you pick) or a folder
+that's already in the Drive. The gateway only gets access to the files it makes and the folders you
+pick (drive.file), nothing else in the account. Do it in a browser on the gateway computer
+(127.0.0.1): Google sends you back there.
 
 ### Recovery key
 

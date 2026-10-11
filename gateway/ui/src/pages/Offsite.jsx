@@ -5,12 +5,12 @@
 
 import { useState } from "react";
 import { Link } from "react-router";
-import { Cloud, HardDrive, Lock, ShieldCheck } from "lucide-react";
+import { Check, Cloud, HardDrive, Lock, ShieldCheck } from "lucide-react";
 import { usePolling } from "../usePolling.js";
 import { timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
 import LoadState from "../components/LoadState.jsx";
-import { CopyCard, DriveSignIn, Note, RecoveryKeyDialog, S3Form, useDriveReturn } from "../components/OffsiteParts.jsx";
+import { CopyCard, DriveReturn, DriveSignIn, GoogleSetup, Note, RecoveryKeyDialog, S3Form, useDriveReturn } from "../components/OffsiteParts.jsx";
 
 function copyLine(c) {
   if (c.paused) return { text: "Paused", tone: "text-warn" };
@@ -58,14 +58,41 @@ function SetUpFailsafe({ google, onConnected }) {
   );
 }
 
+// Google sign-in setup: collapsed once it's done
+function GoogleSection({ google, onSaved }) {
+  const [open, setOpen] = useState(() => window.location.hash === "#google-setup" || !google.configured);
+  return (
+    <section id="google-setup" className="scroll-mt-6">
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 className="flex items-center gap-2 font-medium">
+          <Cloud size={18} className="text-dim" aria-hidden="true" />
+          Google sign-in setup
+        </h2>
+        {google.configured ? (
+          <span className="inline-flex items-center gap-1 text-sm text-good">
+            <Check size={14} aria-hidden="true" /> Set up{google.picker ? ", with folder picking" : ""}
+          </span>
+        ) : (
+          <span className="text-sm text-dim">Not set up yet</span>
+        )}
+        {google.configured && (
+          <button type="button" className="text-sm text-dim underline hover:text-fg" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "Hide" : "Change"}
+          </button>
+        )}
+      </div>
+      <p className="mb-4 max-w-2xl text-sm text-dim">
+        Needed once for Google Drive copies. After that, adding a Drive is just signing in to the Google account and choosing the folder.
+      </p>
+      {open && <GoogleSetup google={google} onSaved={onSaved} />}
+    </section>
+  );
+}
+
 export default function Offsite() {
   const { data, error, loading, reload } = usePolling("/cloud", 4000);
   const [connected, setConnected] = useState(null); // recovery key from connecting a bucket, shown once
-  const [dismissed, setDismissed] = useState(null);
-  const note = useDriveReturn();
-  // A Google sign-in made the very first copy: its recovery key comes once with the status
-  const fromDrive = data?.newRecoveryKey && data.newRecoveryKey.recoveryKey !== dismissed ? data.newRecoveryKey : null;
-  const keyShown = connected ?? fromDrive;
+  const { note, choose } = useDriveReturn();
 
   return (
     <div className="w-full">
@@ -73,6 +100,7 @@ export default function Offsite() {
         Copies of the backups away from this gateway: a failsafe with everything, and each device&rsquo;s own if it has any.
       </PageHeader>
       <Note note={note} />
+      <DriveReturn choose={choose} onChanged={reload} />
       {!data ? (
         <LoadState loading={loading} error={error} onRetry={reload} />
       ) : (
@@ -122,6 +150,7 @@ export default function Offsite() {
                       <span className="min-w-0 flex-1 text-sm">
                         {c.kind === "s3" ? c.providerLabel : "Google Drive"}{" "}
                         <span className="break-all font-mono text-dim">{c.kind === "s3" ? c.bucket : c.email}</span>
+                        {c.kind === "drive" && c.folderName && <span className="text-dim"> / {c.folderName}</span>}
                       </span>
                       <span className={`text-sm ${line.tone}`}>{line.text}</span>
                     </li>
@@ -130,6 +159,8 @@ export default function Offsite() {
               </ul>
             )}
           </section>
+
+          <GoogleSection google={data.google} onSaved={reload} />
 
           {data.recoveryFingerprint && (
             <section>
@@ -155,15 +186,7 @@ export default function Offsite() {
           )}
         </div>
       )}
-      {keyShown && (
-        <RecoveryKeyDialog
-          result={keyShown}
-          onDone={() => {
-            setDismissed(keyShown.recoveryKey);
-            setConnected(null);
-          }}
-        />
-      )}
+      {connected && <RecoveryKeyDialog result={connected} onDone={() => setConnected(null)} />}
     </div>
   );
 }

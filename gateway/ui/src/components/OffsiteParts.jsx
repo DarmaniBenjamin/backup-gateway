@@ -2,9 +2,11 @@
 // page (that device's own copies): the bucket form, the Google Drive sign-in, a copy's status card,
 // and the recovery key dialog.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import {
-  Check, Cloud, CloudOff, Copy, Download, HardDrive, KeyRound, LoaderCircle, LogIn, Pause, Play, RefreshCw, ShieldCheck,
+  Check, Cloud, CloudOff, Copy, Download, ExternalLink, Folder, FolderOpen, FolderPlus, HardDrive, KeyRound, LoaderCircle, LogIn, Pause, Play,
+  RefreshCw, ShieldCheck,
 } from "lucide-react";
 import { api } from "../api.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
@@ -381,28 +383,111 @@ export function Stat({ label, value, sub }) {
 }
 
 
-// Signing in to Google Drive. The OAuth client (ID and secret) is made once in Google Cloud and
-// remembered by the gateway; after that it's just "Sign in with Google".
+// The Google sign-in setup, made once in Google Cloud. After that, adding a Google Drive anywhere
+// is just "Sign in with Google" and choosing the folder.
+export function GoogleSetup({ google, onSaved }) {
+  const [form, setForm] = useState({
+    clientId: google?.clientId ?? "",
+    clientSecret: "",
+    apiKey: google?.apiKey ?? "",
+    projectNumber: google?.projectNumber ?? "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const secretKept = google?.configured && form.clientId.trim() === google.clientId;
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api.post("/cloud/google", form);
+      setForm((f) => ({ ...f, clientSecret: "" }));
+      setMessage({ ok: true, text: "Saved. Adding a Google Drive is now just signing in." });
+      onSaved?.();
+    } catch (err) {
+      setMessage({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <form onSubmit={save} className="glass space-y-4 rounded-lg border border-edge p-5">
+        <Field id="g-client" label="OAuth client ID" hint="Ends with .apps.googleusercontent.com">
+          <input id="g-client" className={`${inputClass} font-mono`} autoComplete="off" spellCheck={false} value={form.clientId} onChange={set("clientId")} />
+        </Field>
+        <Field id="g-secret" label="Client secret" hint={secretKept ? "Saved on the gateway. Leave empty to keep it." : undefined}>
+          <input id="g-secret" type="password" className={`${inputClass} font-mono`} autoComplete="new-password" value={form.clientSecret} onChange={set("clientSecret")} />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="g-key" label="API key" hint="For choosing folders already in the Drive.">
+            <input id="g-key" className={`${inputClass} font-mono`} autoComplete="off" spellCheck={false} placeholder="AIza…" value={form.apiKey} onChange={set("apiKey")} />
+          </Field>
+          <Field id="g-project" label="Project number" hint="Digits, from the project's dashboard.">
+            <input id="g-project" inputMode="numeric" className={`${inputClass} font-mono`} autoComplete="off" spellCheck={false} value={form.projectNumber} onChange={set("projectNumber")} />
+          </Field>
+        </div>
+        {message && (
+          <p role={message.ok ? "status" : "alert"} className={`rounded-md border px-3 py-2 text-sm ${message.ok ? "border-good/40 bg-good/10 text-good" : "border-alert/40 bg-alert/10 text-alert"}`}>
+            {message.text}
+          </p>
+        )}
+        <div className="flex justify-end">
+          <button type="submit" className={primaryButton} disabled={busy || !form.clientId.trim() || (!form.clientSecret.trim() && !secretKept)}>
+            {busy && <LoaderCircle size={16} className="animate-spin" />}
+            Save
+          </button>
+        </div>
+      </form>
+      <aside className="self-start rounded-lg border border-edge p-5 text-sm text-dim">
+        <h3 className="font-display text-sm font-semibold text-fg">In Google Cloud (once, about 10 minutes)</h3>
+        <ol className="mt-3 list-decimal space-y-2 pl-5 marker:text-dim">
+          <li>
+            At <span className="text-fg">console.cloud.google.com</span>, make a project, e.g. &ldquo;Protonic Backup Gateway&rdquo;.
+          </li>
+          <li>
+            <span className="text-fg">APIs &amp; Services → Library</span>: turn on the <span className="text-fg">Google Drive API</span> and the{" "}
+            <span className="text-fg">Google Picker API</span>.
+          </li>
+          <li>
+            <span className="text-fg">Google Auth Platform</span>: External; app name and your email. Then under{" "}
+            <span className="text-fg">Audience</span>, click <span className="text-fg">Publish app</span>. (Left in &ldquo;Testing&rdquo;,
+            Google signs the gateway out every 7 days.)
+          </li>
+          <li>
+            <span className="text-fg">Clients → Create client</span>, type <span className="text-fg">Desktop app</span>. Copy the client ID
+            and secret.
+          </li>
+          <li>
+            <span className="text-fg">APIs &amp; Services → Credentials → Create credentials → API key</span>. Restrict it to the Google
+            Picker API, and copy it.
+          </li>
+          <li>
+            The <span className="text-fg">project number</span> is on the project&rsquo;s dashboard (Project info), next to the project ID.
+          </li>
+        </ol>
+        <p className="mt-3">
+          The gateway only ever asks to see the files it makes and the folders you pick, nothing else in the Google account.
+        </p>
+      </aside>
+    </div>
+  );
+}
+
+// Adding a Google Drive (or signing in again): the button that goes to Google's sign-in page.
+// Google then sends the browser back here, to choose the folder.
 export function DriveSignIn({ deviceId = null, resign = null, google }) {
-  const known = google?.clientId;
-  const [clientId, setClientId] = useState(known ?? "");
-  const [clientSecret, setClientSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const changed = clientId.trim() !== (known ?? "");
-  const ready = clientId.trim() && (clientSecret.trim() || (known && !changed));
 
-  async function go(e) {
-    e.preventDefault();
+  async function go() {
     setBusy(true);
     setError("");
     try {
-      const { url } = await api.post("/cloud/drive/start", {
-        clientId: clientId.trim(),
-        ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
-        ...(deviceId ? { deviceId } : {}),
-        ...(resign ? { resign } : {}),
-      });
+      const { url } = await api.post("/cloud/drive/start", { ...(deviceId ? { deviceId } : {}), ...(resign ? { resign } : {}) });
       window.location.assign(url); // Google's sign-in page; it sends the browser back here after
     } catch (err) {
       setError(err.message);
@@ -410,58 +495,208 @@ export function DriveSignIn({ deviceId = null, resign = null, google }) {
     }
   }
 
+  if (!google?.configured) {
+    return (
+      <p className="rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+        Google sign-in isn&rsquo;t set up on this gateway yet. It&rsquo;s done once, under{" "}
+        <Link to="/offsite#google-setup" className="underline">
+          Off-site → Google sign-in setup
+        </Link>
+        .
+      </p>
+    );
+  }
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <form onSubmit={go} className="space-y-4">
-        <Field id="g-client" label="OAuth client ID" hint="Ends with .apps.googleusercontent.com">
-          <input id="g-client" className={`${inputClass} font-mono`} autoComplete="off" spellCheck={false} value={clientId} onChange={(e) => setClientId(e.target.value)} />
-        </Field>
-        <Field id="g-secret" label="Client secret" hint={known && !changed ? "Already saved on the gateway. Leave empty to use it." : undefined}>
-          <input id="g-secret" type="password" className={`${inputClass} font-mono`} autoComplete="new-password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
-        </Field>
-        {error && (
-          <p role="alert" className="rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
-            {error}
-          </p>
-        )}
-        <button type="submit" className={primaryButton} disabled={!ready || busy}>
-          {busy ? <LoaderCircle size={16} className="animate-spin" /> : <LogIn size={16} />}
-          Sign in with Google
-        </button>
-        <p className="text-xs text-dim">
-          Use this gateway in a browser on the gateway computer itself (the address starting with 127.0.0.1): Google sends you
-          back there after you sign in.
+    <div className="space-y-3">
+      <button type="button" className={primaryButton} disabled={busy} onClick={go}>
+        {busy ? <LoaderCircle size={16} className="animate-spin" /> : <LogIn size={16} />}
+        Sign in with Google
+      </button>
+      {error && (
+        <p role="alert" className="text-sm text-alert">
+          {error}
         </p>
-      </form>
-      <aside className="self-start rounded-lg border border-edge p-4 text-sm text-dim">
-        <h3 className="font-display text-sm font-semibold text-fg">{known ? "The Google client is set up" : "First time: make a Google client (once)"}</h3>
-        {known ? (
-          <p className="mt-2">Just sign in with the Google account whose Drive should hold this copy.</p>
-        ) : (
-          <ol className="mt-2 list-decimal space-y-1.5 pl-5 marker:text-dim">
-            <li>
-              At <span className="text-fg">console.cloud.google.com</span>, make a project (e.g. &ldquo;Backup Gateway&rdquo;).
-            </li>
-            <li>
-              <span className="text-fg">APIs &amp; Services → Library</span>: turn on the <span className="text-fg">Google Drive API</span>.
-            </li>
-            <li>
-              <span className="text-fg">Google Auth Platform</span> (OAuth consent screen): External, fill in the app name and your
-              email, then under Audience click <span className="text-fg">Publish app</span> (&ldquo;In production&rdquo;). In
-              &ldquo;Testing&rdquo;, Google signs the gateway out every 7 days.
-            </li>
-            <li>
-              <span className="text-fg">Clients → Create client</span>, type <span className="text-fg">Desktop app</span>. Copy the
-              client ID and secret here.
-            </li>
-            <li>
-              If Google says it &ldquo;hasn&rsquo;t verified this app&rdquo;, click Advanced → Go to (your app): it&rsquo;s your
-              own app. It only asks to see files the gateway itself makes.
-            </li>
-          </ol>
-        )}
-      </aside>
+      )}
+      <p className="text-xs text-dim">
+        {resign
+          ? "Sign in with the same Google account as before."
+          : "Then choose where in that Drive the backups go: a new folder, or one that's already there."}{" "}
+        Do this in a browser on the gateway computer (the 127.0.0.1 address): Google sends you back there.
+      </p>
     </div>
+  );
+}
+
+// Opens Google's folder picker in its own small window and waits for the folder chosen there
+function pickFolder(pendingId) {
+  return new Promise((resolve, reject) => {
+    const win = window.open(`/google-picker.html#${encodeURIComponent(pendingId)}`, "bg-google-picker", "width=900,height=650");
+    if (!win) return reject(new Error("The browser blocked the Google window. Allow pop-ups for this page and try again."));
+    const done = (fn) => {
+      window.removeEventListener("message", onMessage);
+      clearInterval(timer);
+      fn();
+    };
+    function onMessage(e) {
+      if (e.origin !== window.location.origin || e.data?.source !== "bg-google-picker") return;
+      if (e.data.folder) done(() => resolve(e.data.folder));
+      else if (e.data.cancelled) done(() => resolve(null));
+      else if (e.data.error) done(() => reject(new Error(e.data.error)));
+    }
+    window.addEventListener("message", onMessage);
+    const timer = setInterval(() => win.closed && done(() => resolve(null)), 700);
+  });
+}
+
+// After signing in to Google: where in that Drive the backups go
+export function DriveFolderChooser({ pendingId, onDone, onClose }) {
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
+  const [mode, setMode] = useState("new");
+  const [name, setName] = useState("");
+  const [parent, setParent] = useState(null); // { id, name } or null = My Drive
+  const [existing, setExisting] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    api
+      .get(`/cloud/drive/pending/${encodeURIComponent(pendingId)}`)
+      .then((r) => {
+        setInfo(r);
+        setName(r.defaultName);
+      })
+      .catch((err) => setError(err.message));
+  }, [pendingId]);
+
+  async function pick(kind) {
+    setError("");
+    setBusy(`pick-${kind}`);
+    try {
+      const folder = await pickFolder(pendingId);
+      if (folder) (kind === "parent" ? setParent : setExisting)(folder);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function finish() {
+    setError("");
+    setBusy("finish");
+    try {
+      const body = mode === "existing" ? { folderId: existing.id } : { name, ...(parent ? { parentId: parent.id } : {}) };
+      onDone(await api.post(`/cloud/drive/pending/${encodeURIComponent(pendingId)}/finish`, body));
+    } catch (err) {
+      setError(err.message);
+      setBusy("");
+    }
+  }
+
+  function cancel() {
+    api.post(`/cloud/drive/pending/${encodeURIComponent(pendingId)}/cancel`).catch(() => {});
+    onClose();
+  }
+
+  const ready = info && !busy && (mode === "existing" ? !!existing : !!name.trim());
+  const option = (id, title, sub) => (
+    <label
+      className={`flex cursor-pointer items-start gap-3 rounded-md border px-4 py-3 has-focus-visible:ring-2 has-focus-visible:ring-signal ${
+        mode === id ? "border-signal bg-signal/10" : "border-edge hover:bg-raised"
+      } ${id === "existing" && !info?.picker ? "cursor-not-allowed opacity-60" : ""}`}
+    >
+      <input type="radio" name="drive-folder-mode" className="sr-only" checked={mode === id} disabled={id === "existing" && !info?.picker} onChange={() => setMode(id)} />
+      {id === "new" ? <FolderPlus size={18} className="mt-0.5 shrink-0 text-signal" aria-hidden="true" /> : <FolderOpen size={18} className="mt-0.5 shrink-0 text-signal" aria-hidden="true" />}
+      <span>
+        <span className="block text-sm text-fg">{title}</span>
+        <span className="block text-xs text-dim">{sub}</span>
+      </span>
+    </label>
+  );
+
+  return (
+    <Modal
+      title="Choose the Google Drive folder"
+      onClose={cancel}
+      wide
+      footer={
+        <>
+          <button type="button" className={secondaryButton} onClick={cancel}>
+            Cancel
+          </button>
+          <button type="button" className={primaryButton} disabled={!ready} onClick={finish}>
+            {busy === "finish" && <LoaderCircle size={16} className="animate-spin" />}
+            {mode === "new" ? "Create folder and connect" : "Use this folder"}
+          </button>
+        </>
+      }
+    >
+      {!info ? (
+        error ? <p className="text-sm text-alert">{error}</p> : <p className="text-sm text-dim">Loading…</p>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <p className="text-dim">
+            Signed in as <span className="font-mono text-fg">{info.email}</span>. Where should the backups go?
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {option("new", "Make a new folder", "In My Drive, or inside a folder you choose.")}
+            {option("existing", "Use a folder that's already there", info.picker ? "Pick it in Google Drive." : "Needs the API key and project number in Google sign-in setup.")}
+          </div>
+
+          {mode === "new" ? (
+            <div className="space-y-3 rounded-md border border-edge p-4">
+              <Field id="drive-folder-name" label="Folder name">
+                <input id="drive-folder-name" className={inputClass} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <div>
+                <p className="mb-1.5 text-sm text-dim">Inside</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-md border border-edge bg-raised px-3 py-1.5 text-fg">
+                    <Folder size={16} className="text-dim" aria-hidden="true" />
+                    {parent ? parent.name : "My Drive"}
+                  </span>
+                  {info.picker && (
+                    <button type="button" className={secondaryButton} disabled={!!busy} onClick={() => pick("parent")}>
+                      {busy === "pick-parent" && <LoaderCircle size={16} className="animate-spin" />}
+                      Choose another place
+                    </button>
+                  )}
+                  {parent && (
+                    <button type="button" className="text-sm text-dim underline hover:text-fg" onClick={() => setParent(null)}>
+                      Back to My Drive
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-edge p-4">
+              {existing ? (
+                <span className="inline-flex items-center gap-2 text-fg">
+                  <FolderOpen size={16} className="text-signal" aria-hidden="true" />
+                  {existing.name}
+                </span>
+              ) : (
+                <span className="text-dim">No folder chosen yet.</span>
+              )}
+              <button type="button" className={secondaryButton} disabled={!!busy} onClick={() => pick("existing")}>
+                {busy === "pick-existing" && <LoaderCircle size={16} className="animate-spin" />}
+                {existing ? "Choose a different folder" : "Choose folder in Google Drive"}
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-dim">
+            The gateway puts its own <span className="font-mono">packs</span> and <span className="font-mono">catalogs</span> folders inside.
+            Everything in them is encrypted. Don&rsquo;t move or rename them.
+          </p>
+          {error && (
+            <p role="alert" className="rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -519,6 +754,18 @@ export function CopyCard({ s, google, onChanged }) {
               {s.kind === "s3" ? s.providerLabel : "Google Drive"}{" "}
               <span className="break-all font-mono text-sm text-dim">{s.kind === "s3" ? s.bucket : s.email}</span>
             </p>
+            {s.kind === "drive" && s.folderId && (
+              <a
+                href={`https://drive.google.com/drive/folders/${encodeURIComponent(s.folderId)}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-0.5 inline-flex items-center gap-1.5 text-sm text-dim hover:text-signal"
+              >
+                <Folder size={14} aria-hidden="true" />
+                {s.folderName ?? "Its folder"}
+                <ExternalLink size={12} aria-hidden="true" />
+              </a>
+            )}
             <p className={`mt-1 flex items-center gap-2 text-sm ${h.tone}`}>
               <Icon size={16} className={`shrink-0 ${h.spin ? "animate-spin" : ""}`} aria-hidden="true" />
               {h.title}
@@ -586,17 +833,44 @@ export function CopyCard({ s, google, onChanged }) {
   );
 }
 
-// Shown after Google sends the browser back (?drive=connected or ?drive_error=...)
+// After Google sends the browser back: ?drive_choose=<id> (choose the folder next),
+// ?drive=signed-in, or ?drive_error=...
 export function useDriveReturn() {
-  const params = new URLSearchParams(window.location.search);
-  const [note] = useState(() => {
-    if (params.get("drive_error")) return { ok: false, text: params.get("drive_error") };
-    if (params.get("drive") === "connected") return { ok: true, text: "Google Drive is connected. The first upload starts in a few seconds." };
-    if (params.get("drive") === "signed-in") return { ok: true, text: "Signed in to Google Drive again. Uploads carry on." };
-    return null;
+  const [state] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    let note = null;
+    if (params.get("drive_error")) note = { ok: false, text: params.get("drive_error") };
+    else if (params.get("drive") === "signed-in") note = { ok: true, text: "Signed in to Google Drive again. Uploads carry on." };
+    const choose = params.get("drive_choose");
+    if (note || choose) window.history.replaceState(null, "", window.location.pathname);
+    return { note, choose };
   });
-  if (note && (params.has("drive") || params.has("drive_error"))) window.history.replaceState(null, "", window.location.pathname);
-  return note;
+  return state;
+}
+
+// Choosing the folder after a Google sign-in, then showing the recovery key if it was the first copy
+export function DriveReturn({ choose, onChanged }) {
+  const [pending, setPending] = useState(choose);
+  const [keyShown, setKeyShown] = useState(null);
+  const [note, setNote] = useState(null);
+  return (
+    <>
+      <Note note={note} />
+      {pending && (
+        <DriveFolderChooser
+          pendingId={pending}
+          onClose={() => setPending(null)}
+          onDone={(result) => {
+            setPending(null);
+            setNote({ ok: true, text: `Google Drive connected: backups go to “${result.folderName}” in ${result.email}. The first upload starts in a few seconds.` });
+            if (result.recoveryKey) setKeyShown(result);
+            onChanged();
+          }}
+        />
+      )}
+      {keyShown && <RecoveryKeyDialog result={keyShown} onDone={() => setKeyShown(null)} />}
+    </>
+  );
 }
 
 export function Note({ note }) {
