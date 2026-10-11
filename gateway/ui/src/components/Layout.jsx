@@ -1,4 +1,4 @@
-// App frame: a glass top bar with the pages as tabs (a drop-down menu on smaller screens),
+// App frame: a glass top bar with the pages as tabs (a slide-in menu on smaller screens),
 // an alert pill and your account on the right, and the page below.
 // Alerts are checked here for every page: they appear as a banner above the page and as the
 // pill in the top bar. Pages get the alerts (and a refresh function) through the outlet context.
@@ -78,6 +78,18 @@ export default function Layout() {
 
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
+  // While the phone menu is open: Escape closes it, and the page behind doesn't scroll
+  useEffect(() => {
+    if (!menuOpen) return;
+    const esc = (e) => e.key === "Escape" && setMenuOpen(false);
+    document.addEventListener("keydown", esc);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", esc);
+      document.body.style.overflow = "";
+    };
+  }, [menuOpen]);
+
   const tabClass = ({ isActive }) =>
     [
       "relative flex h-full items-center px-3.5 text-sm transition-colors",
@@ -116,33 +128,68 @@ export default function Layout() {
             <AccountMenu user={user} onLogout={logout} />
             <button
               type="button"
-              onClick={() => setMenuOpen((o) => !o)}
+              onClick={() => setMenuOpen(true)}
               aria-expanded={menuOpen}
-              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-label="Open menu"
               className="flex h-9 w-9 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg lg:hidden"
             >
-              {menuOpen ? <X size={20} /> : <Menu size={20} />}
+              <Menu size={20} />
             </button>
           </div>
         </div>
+      </header>
 
-        {menuOpen && (
-          <nav className="border-t border-edge px-4 pb-4 pt-2 lg:hidden" aria-label="Main">
+      {/* Phone / tablet menu: slides in over the page from the right, nothing moves underneath */}
+      {menuOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={() => setMenuOpen(false)}
+            className="absolute inset-0 h-full w-full cursor-default bg-night/70 backdrop-blur-sm"
+          />
+          <nav
+            className="absolute inset-y-0 right-0 flex w-72 max-w-[85%] animate-drawer flex-col border-l border-edge bg-solid p-4 shadow-2xl"
+            aria-label="Main"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <span className="flex items-center gap-2.5">
+                <Logo size={26} />
+                <span className="font-display font-semibold">Backup Gateway</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close menu"
+                autoFocus
+                className="flex h-9 w-9 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg"
+              >
+                <X size={20} />
+              </button>
+            </div>
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.end}
                 className={({ isActive }) =>
-                  `flex h-11 items-center rounded-md px-3 text-sm ${isActive ? "bg-raised text-fg" : "text-dim hover:text-fg"}`
+                  `flex h-11 items-center rounded-md px-3 text-sm ${isActive ? "bg-raised text-fg" : "text-dim hover:bg-raised/60 hover:text-fg"}`
                 }
               >
                 {item.label}
               </NavLink>
             ))}
+            <button
+              type="button"
+              onClick={logout}
+              className="mt-auto flex h-11 items-center gap-2 rounded-md px-3 text-sm text-dim hover:bg-raised hover:text-fg"
+            >
+              <LogOut size={16} aria-hidden="true" />
+              Log out {user?.username}
+            </button>
           </nav>
-        )}
-      </header>
+        </div>
+      )}
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         <AlertBanner alerts={alerts} onChange={reloadAlerts} />
