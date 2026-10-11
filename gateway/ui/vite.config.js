@@ -19,5 +19,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Never inline files (like small font files) as data: URLs. The gateway's security policy
+    // only allows fonts and images served from the gateway itself, and blocks data: fonts.
+    assetsInlineLimit: 0,
   },
 });

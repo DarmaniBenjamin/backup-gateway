@@ -144,7 +144,8 @@ function Tiles({ data, counts }) {
 
 function DeviceCard({ d }) {
   const state = STATES[stateOf(d)];
-  const max = Math.max(1, ...d.activity.map((a) => a.ok + a.held));
+  const activity = d.activity ?? []; // missing if the gateway hasn't been restarted since updating
+  const max = Math.max(1, ...activity.map((a) => a.ok + a.held));
   return (
     <Link
       to={`/devices/${d.id}`}
@@ -160,7 +161,7 @@ function DeviceCard({ d }) {
       </p>
       {/* 24 hours of changes in 2-hour slots: amber where changes were held back */}
       <div className="mt-3 flex h-9 items-end gap-0.5" aria-label="Changes in the last 24 hours" role="img">
-        {d.activity.map((a, i) => (
+        {activity.map((a, i) => (
           <div key={i} className="flex h-full flex-1 flex-col justify-end gap-px">
             {a.held > 0 && <span className="rounded-[1px] bg-warn/70" style={{ height: `${(a.held / max) * 100}%` }} />}
             <span
