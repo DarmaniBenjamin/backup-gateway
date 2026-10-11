@@ -23,7 +23,8 @@ export function loadConfig() {
   // managed from the web UI. Optional: a device can start with no folders.
   const watchDirSetting = process.env.AGENT_WATCH_DIR?.trim();
   const watchDir = watchDirSetting ? path.resolve(watchDirSetting) : null;
-  if (watchDir && !(fs.existsSync(watchDir) && fs.statSync(watchDir).isDirectory())) {
+  // (stat, not existsSync: existsSync ignores the read-anything right the Linux service runs with)
+  if (watchDir && !fs.statSync(watchDir, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`AGENT_WATCH_DIR is not an existing folder: ${watchDir}`);
   }
 

@@ -40,6 +40,34 @@ function folderStamp(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(date.getMinutes())}`;
 }
 
+// The agent may run as its own service user (the Linux installer does that). Restored files and
+// the folders made for them are given to whoever owns the file being replaced, or else the
+// folder they go into, so the person can open and edit them as usual. Best effort: without the
+// right to change owners, files simply keep the agent's.
+async function ownerFor(target) {
+  if (typeof process.getuid !== "function") return null; // Windows: not needed
+  for (let p = target; ; p = path.dirname(p)) {
+    try {
+      const st = await fsp.stat(p);
+      return st.uid === process.getuid() && st.gid === process.getgid() ? null : { uid: st.uid, gid: st.gid };
+    } catch {
+      if (path.dirname(p) === p) return null;
+    }
+  }
+}
+
+async function giveTo(owner, paths) {
+  if (!owner) return;
+  for (const p of paths) {
+    try {
+      await fsp.chown(p, owner.uid, owner.gid);
+    } catch (err) {
+      log.debug(`Could not hand ${p} to its owner: ${err.message}`);
+      return;
+    }
+  }
+}
+
 export function createRestorer({ db, connection, tracker }) {
   const { client, auth } = connection;
   const running = new Set();
@@ -60,7 +88,14 @@ export function createRestorer({ db, connection, tracker }) {
   }
 
   async function restoreFile(job, file, keys, target) {
-    await fsp.mkdir(path.dirname(target), { recursive: true });
+    const owner = await ownerFor(target);
+    const firstNewDir = await fsp.mkdir(path.dirname(target), { recursive: true });
+    if (firstNewDir) {
+      // mkdir returns the first folder it created; hand over that one and everything below it
+      const dirs = [];
+      for (let d = path.dirname(target); d.length >= firstNewDir.length; d = path.dirname(d)) dirs.push(d);
+      await giveTo(owner, dirs);
+    }
 
     // ".tmp" files are ignored by the watcher, so half-restored files are never backed up
     const tmp = `${target}.restoring-${crypto.randomBytes(4).toString("hex")}.tmp`;
@@ -80,6 +115,10 @@ export function createRestorer({ db, connection, tracker }) {
       if (size !== file.size || hash.digest("hex") !== file.sha256) {
         throw new Error("SHA-256 check failed — file not restored");
       }
+      // Replacing a file: keep its permissions (e.g. private files stay private)
+      const existing = await fsp.stat(target).catch(() => null);
+      if (existing) await fsp.chmod(tmp, existing.mode & 0o7777).catch(() => {});
+      await giveTo(owner, [tmp]);
       await fsp.rename(tmp, target); // instant swap: the file is either fully restored or untouched
       return size;
     } catch (err) {
