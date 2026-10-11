@@ -57,10 +57,11 @@ function explain(err, stepName = "") {
       }
       return `the key isn't allowed to do this (${err.message}). Make sure it's for this bucket and has "Read and Write" access.`;
     case "InvalidRequest":
-      if (/lock/i.test(err.message)) return "Object Lock isn't turned on for this bucket.";
+    case "InvalidArgument":
+      if (/lock|retention/i.test(err.message)) return "Object Lock isn't turned on for this bucket.";
       return `${err.message} (${err.code})`;
     case "NoSuchBucket":
-      return "That bucket doesn't exist at this endpoint.";
+      return `the storage says there's no such bucket (${err.message}). Check the bucket name, that the endpoint is the one shown on the bucket's page, and that the key was made for this bucket.`;
     case "RequestTimeTooSkewed":
       return "This computer's clock is wrong, so the storage service rejects its requests. Fix the date and time.";
     default:
@@ -101,7 +102,7 @@ export function cleanCloudSettings(body) {
 
 // Proves the settings work before anything is saved, one step at a time so a failure says
 // exactly which permission is missing:
-//   1. check Object Lock is on for the bucket (needs: read bucket retentions; skipped if not allowed)
+//   1. check Object Lock is on for the bucket (skipped if the storage or key can't answer)
 //   2. upload a tiny test file with a one-day lock (needs: write files + write file retentions)
 //   3. extend that lock a little, as the gateway does for backups still in use (write file retentions)
 //   4. list the bucket (list files)
@@ -120,7 +121,8 @@ export async function testCloud(settings) {
     try {
       return await s3.objectLockEnabled();
     } catch (err) {
-      if (err instanceof S3Error && err.code === "AccessDenied") return null; // can't tell; the locked upload below will show it
+      // Some storage (and some keys) can't answer this question; the locked upload below is the real test
+      if (err instanceof S3Error && ["AccessDenied", "NoSuchBucket", "NotImplemented", "MethodNotAllowed"].includes(err.code)) return null;
       throw err;
     }
   });
