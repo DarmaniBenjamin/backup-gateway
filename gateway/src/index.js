@@ -5,7 +5,8 @@
 import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db.js";
-import { loadOrCreateGatewayKeys } from "./keys.js";
+import { loadOrCreateGatewayKeys, loadOrCreateUpdateKey } from "./keys.js";
+import { createUpdates } from "./updates.js";
 import { createStorage } from "./storage.js";
 import { createServer } from "./server.js";
 import { createGuard } from "./guard.js";
@@ -13,6 +14,8 @@ import { createBroker } from "./broker.js";
 import { buildAgentPackage } from "./agent-package.js";
 import { createInstalls } from "./installs.js";
 import { createCopies } from "./cloud/copies.js";
+import { createScanner } from "./scanner.js";
+import { createSecurity } from "./security.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -30,7 +33,10 @@ const keys = loadOrCreateGatewayKeys(config.dataDir);
 const storage = createStorage(config.dataDir);
 const store = openAdminStore(config.dataDir);
 
-const guard = createGuard({ db, config });
+// Antivirus (ClamAV) and the security record behind the Security page
+const scanner = createScanner();
+const security = createSecurity({ db, dataDir: config.dataDir, keys, storage, scanner });
+const guard = createGuard({ db, config, security });
 const broker = createBroker();
 let agentPackage = null;
 try {
@@ -41,12 +47,16 @@ try {
 if (!agentPackage) log.warn(`Agent folder not found at ${config.agentDir}: one-line installs are off (set GATEWAY_AGENT_DIR)`);
 const windowsSetup = fs.existsSync(config.windowsSetupPath) ? fs.readFileSync(config.windowsSetupPath) : null;
 if (!windowsSetup) log.warn(`Windows setup program not found at ${config.windowsSetupPath}: Windows devices get the command only`);
-const installs = createInstalls({ config, store, agentPackage, windowsSetup });
-const server = createServer({ db, keys, storage, guard, broker, installs });
+const updateKey = loadOrCreateUpdateKey(config.dataDir);
+const installs = createInstalls({ config, store, agentPackage, windowsSetup, updateKey });
+// Automatic agent updates: devices on an older agent are offered this gateway's version
+const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updateKey, security });
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates });
 copies.start();
+security.start({ pendingCleared: () => copies.syncNow() });
 
 function onListenError(name, port) {
   return (err) => {
@@ -76,6 +86,7 @@ adminServer.listen(config.adminPort, config.adminHost, () => {
 function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
   copies.stop();
+  security.stop();
   adminServer.close();
   server.close(() => {
     db.close();

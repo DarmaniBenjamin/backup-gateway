@@ -16,6 +16,7 @@ const Jobs = lazy(pages.Jobs);
 const Integrity = lazy(pages.Integrity);
 const Audit = lazy(pages.Audit);
 const Offsite = lazy(pages.Offsite);
+const Security = lazy(pages.Security);
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="devices" element={<Devices />} />
         <Route path="devices/:id" element={<DeviceFolders />} />
         <Route path="restore" element={<Restore />} />
+        <Route path="security" element={<Security />} />
         <Route path="quarantine" element={<Quarantine />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="offsite" element={<Offsite />} />

@@ -10,6 +10,7 @@ import PageHeader from "../components/PageHeader.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import LoadState from "../components/LoadState.jsx";
 import AddDeviceModal from "../components/AddDeviceModal.jsx";
+import { UpdateLine, UpdatesBar, useUpdates } from "../components/AgentUpdates.jsx";
 import { primaryButton } from "../components/buttons.js";
 
 function Field({ label, children, title }) {
@@ -23,7 +24,7 @@ function Field({ label, children, title }) {
   );
 }
 
-function DeviceRow({ d }) {
+function DeviceRow({ d, update, gatewayVersion }) {
   return (
     <li className="grid gap-4 px-5 py-4 md:grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))] md:items-center">
       <div className="flex items-start justify-between gap-3 md:block">
@@ -34,6 +35,11 @@ function DeviceRow({ d }) {
           <p className="truncate font-mono text-xs text-secure/70" title="Device ID">
             {d.id}
           </p>
+          {update && (
+            <p className="mt-0.5 truncate">
+              <UpdateLine u={update} gatewayVersion={gatewayVersion} />
+            </p>
+          )}
         </div>
         <div className="md:hidden">
           <StatusBadge status={d.status} />
@@ -83,6 +89,8 @@ function DeviceRow({ d }) {
 export default function Devices() {
   const { data, error, loading, reload } = usePolling("/devices", 15000);
   const [adding, setAdding] = useState(false);
+  const { data: updates, reload: reloadUpdates } = useUpdates();
+  const updateOf = useMemo(() => new Map((updates?.devices ?? []).map((u) => [u.id, u])), [updates]);
 
   const groups = useMemo(() => {
     const map = new Map();
@@ -118,6 +126,7 @@ export default function Devices() {
         </div>
       ) : (
         <div className="space-y-8">
+          <UpdatesBar data={updates} reload={reloadUpdates} />
           {groups.map(([client, devices]) => (
             <section key={client}>
               <h2 className="mb-3 text-lg font-medium">{client}</h2>
@@ -132,7 +141,7 @@ export default function Devices() {
                 </div>
                 <ul className="divide-y divide-edge">
                   {devices.map((d) => (
-                    <DeviceRow key={d.id} d={d} />
+                    <DeviceRow key={d.id} d={d} update={updateOf.get(d.id)} gatewayVersion={updates?.version} />
                   ))}
                 </ul>
               </div>

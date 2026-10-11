@@ -17,6 +17,7 @@ import FolderTree from "../components/FolderTree.jsx";
 import DeviceSettings from "../components/DeviceSettings.jsx";
 import FolderLock from "../components/FolderLock.jsx";
 import DeviceCopies from "../components/DeviceCopies.jsx";
+import { DeviceAgent } from "../components/AgentUpdates.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const STATE = {
@@ -382,6 +383,8 @@ export default function DeviceFolders() {
       </section>
 
       {data.offsite && <DeviceCopies device={device} offsite={data.offsite} onChanged={reload} />}
+
+      <DeviceAgent deviceId={device.id} deviceName={device.name} />
 
       <DeviceSettings
         deviceId={device.id}

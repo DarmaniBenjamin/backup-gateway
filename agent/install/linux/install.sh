@@ -46,13 +46,15 @@ Usage: sudo $0 [options]
   --watch DIR       Optional first folder to back up (must be inside an allowed folder).
                     More folders can be added from the web UI later.
   --name NAME       Device name shown in the web UI (default: this computer's hostname)
+  --update-key KEY  The gateway's update key (base64), so agent updates install by themselves.
+                    The one-line command from the web UI includes it.
   -h, --help        Show this help
 
 The first install needs --gateway, --code and --allowed. To upgrade, run it again with no options.
 EOF
 }
 
-GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME="" FULL=no
+GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME="" FULL=no UPDATE_KEY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --gateway) GATEWAY=${2-}; shift 2 ;;
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
     --watch) WATCH=${2-}; shift 2 ;;
     --name) NAME=${2-}; shift 2 ;;
     --full-access) FULL=yes; shift ;;
+    --update-key) UPDATE_KEY=${2-}; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) usage; die "unknown option: $1" ;;
   esac
@@ -103,6 +106,7 @@ fi
 [[ "$GATEWAY" =~ ^https?://[^[:space:]/]+(/[^[:space:]]*)?$ ]] || die "--gateway must look like http://192.168.1.10:8080"
 GATEWAY=${GATEWAY%/}
 [[ -z "$CODE" || "$CODE" =~ ^[A-Za-z0-9-]+$ ]] || die "the enrollment code should only contain letters, numbers and dashes."
+[[ -z "$UPDATE_KEY" || "$UPDATE_KEY" =~ ^[A-Za-z0-9+/]{40,120}={0,2}$ ]] || die "--update-key doesn't look like the gateway's update key."
 
 # Text that goes into the settings file and the service file can't contain quotes, backslashes,
 # $ signs or line breaks (they would change its meaning there)
@@ -225,6 +229,24 @@ chown -R root:root "$STAGE"
 chmod -R u=rwX,go=rX "$STAGE"
 ok "agent $AGENT_VERSION ready"
 
+# ---- The updater (installs agent updates the gateway signed) ---------------------------------
+
+UPD=$PREFIX/updater
+mkdir -p "$UPD"
+chmod 0700 "$UPD"
+if [ -n "$UPDATE_KEY" ]; then
+  { echo "-----BEGIN PUBLIC KEY-----"; printf '%s\n' "$UPDATE_KEY" | fold -w 64; echo "-----END PUBLIC KEY-----"; } >"$UPD/update-key.pem"
+  "$NODE" -e 'require("crypto").createPublicKey(require("fs").readFileSync(process.argv[1]))' "$UPD/update-key.pem" 2>/dev/null ||
+    { rm -f "$UPD/update-key.pem"; die "--update-key isn't a valid key."; }
+fi
+UPDATER=""
+if [ -f "$UPD/update-key.pem" ]; then
+  install -m 0600 "$SRC/install/updater/update.mjs" "$UPD/update.mjs"
+  printf '{"prefix":"%s","dataDir":"%s","platform":"%s","service":"%s","node":"%s"}\n' "$PREFIX" "$DATA_DIR" "linux" "$SERVICE" "$NODE" >"$UPD/updater.json"
+  chmod 0600 "$UPD/update-key.pem" "$UPD/updater.json"
+  UPDATER=systemd
+fi
+
 # ---- Service user, settings and data folder ---------------------------------------------------
 
 if ! id "$APP_USER" >/dev/null 2>&1; then
@@ -248,6 +270,7 @@ AGENT_DEVICE_NAME="$NAME"
 AGENT_DATA_DIR="$DATA_DIR"
 AGENT_LOG_LEVEL="$LOG_LEVEL"
 AGENT_ENROLL_CODE="$CODE"
+AGENT_UPDATER="$UPDATER"
 EOF
 chown root:"$APP_USER" "$CONF.new"
 chmod 0640 "$CONF.new"
@@ -342,6 +365,33 @@ EOF
 mv "$UNIT.new" "$UNIT"
 chmod 0644 "$UNIT"
 
+# The updater: started (as root) when the agent leaves an update request in its data folder
+if [ "$UPDATER" = systemd ]; then
+  cat >"/etc/systemd/system/$SERVICE-update.service" <<UNIT_EOF
+# Installs an agent update the gateway signed (see $UPD/update.mjs). Written by install.sh.
+[Unit]
+Description=Backup agent updater
+
+[Service]
+Type=oneshot
+ExecStart=$NODE $UPD/update.mjs $UPD/updater.json
+TimeoutStartSec=20min
+UNIT_EOF
+  cat >"/etc/systemd/system/$SERVICE-update.path" <<UNIT_EOF
+# Starts $SERVICE-update.service when the agent has downloaded and checked an update.
+[Unit]
+Description=Backup agent: watch for downloaded updates
+
+[Path]
+PathExists=$DATA_DIR/update/request.json
+Unit=$SERVICE-update.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+  chmod 0644 "/etc/systemd/system/$SERVICE-update.service" "/etc/systemd/system/$SERVICE-update.path"
+fi
+
 # Swap in the new code only now, with the service stopped
 systemctl stop "$SERVICE" 2>/dev/null || true
 rm -rf "$PREFIX/app.old"
@@ -358,6 +408,13 @@ STARTED=$(date '+%Y-%m-%d %H:%M:%S')
 systemctl enable --quiet "$SERVICE"
 systemctl restart "$SERVICE"
 ok "service $SERVICE installed and started"
+if [ "$UPDATER" = systemd ]; then
+  mkdir -p "$DATA_DIR/update" && chown "$APP_USER:$APP_USER" "$DATA_DIR/update" && chmod 0700 "$DATA_DIR/update"
+  systemctl enable --quiet --now "$SERVICE-update.path"
+  ok "automatic updates on (only updates signed by the gateway are installed)"
+else
+  echo "  (automatic updates are off: run the install command from the web UI once to turn them on)"
+fi
 
 # ---- Check that it enrolled -------------------------------------------------------------------
 

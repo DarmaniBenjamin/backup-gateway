@@ -118,11 +118,24 @@ export function agentApiUrl(config) {
 const q = (s) => `'${s}'`; // safe: every value was checked against SAFE for its platform
 const cleanName = (s) => s.replace(/[^\w .&()-]/g, "");
 
-function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
+// The installer's options. An upgrade (an enrolled device getting the self-updater) passes only the
+// update key: the installer keeps everything else as it is. The key is base64 (safe in quotes).
+function installerArgs({ code, options, gatewayUrl, updateKeyB64 }, win = false) {
+  const o = (name) => (win ? `-${name[0].toUpperCase()}${name.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase())}` : `--${name}`);
+  const args = [];
+  if (!options.upgrade) {
+    args.push(`${o("gateway")} ${q(gatewayUrl)}`, `${o("code")} ${q(code)}`);
+    args.push(options.fullAccess ? (win ? "-FullAccess" : "--full-access") : `${o("allowed")} ${q(options.allowed)}`);
+    if (options.name) args.push(`${o("name")} ${q(options.name)}`);
+    if (options.watch) args.push(`${o("watch")} ${q(options.watch)}`);
+  }
+  if (updateKeyB64) args.push(`${o("update-key")} ${q(updateKeyB64)}`);
+  return args;
+}
+
+function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
-  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, options.fullAccess ? "--full-access" : `--allowed ${q(options.allowed)}`];
-  if (options.name) args.push(`--name ${q(options.name)}`);
-  if (options.watch) args.push(`--watch ${q(options.watch)}`);
+  const args = installerArgs({ code, options, gatewayUrl, updateKeyB64 });
   return `#!/usr/bin/env bash
 # Backup agent install for ${cleanName(clientName)}, made by the backup gateway.
 # Works once, until ${expiresAt.toISOString()}.
@@ -161,11 +174,9 @@ main "$@"
 
 // The same as Linux, with the Synology installer (DSM 7: Node.js and everything else go on the data
 // volume, which DSM updates leave alone)
-function synologyScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
+function synologyScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
-  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, options.fullAccess ? "--full-access" : `--allowed ${q(options.allowed)}`];
-  if (options.name) args.push(`--name ${q(options.name)}`);
-  if (options.watch) args.push(`--watch ${q(options.watch)}`);
+  const args = installerArgs({ code, options, gatewayUrl, updateKeyB64 });
   return `#!/bin/bash
 # Backup agent install for ${cleanName(clientName)} (Synology NAS), made by the backup gateway.
 # Works once, until ${expiresAt.toISOString()}.
@@ -206,11 +217,9 @@ main "$@"
 
 // Run with "irm … | iex", so it never calls exit (that would close the person's PowerShell
 // window); the real installer runs as its own powershell.exe and reports back with its exit code.
-function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
+function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.zip`;
-  const args = [`-Gateway ${q(gatewayUrl)}`, `-Code ${q(code)}`, options.fullAccess ? "-FullAccess" : `-Allowed ${q(options.allowed)}`];
-  if (options.name) args.push(`-Name ${q(options.name)}`);
-  if (options.watch) args.push(`-Watch ${q(options.watch)}`);
+  const args = installerArgs({ code, options, gatewayUrl, updateKeyB64 }, true);
   return `# Backup agent install for ${cleanName(clientName)}, made by the backup gateway.
 # Works once, until ${expiresAt.toISOString()}.
 & {
@@ -248,7 +257,7 @@ function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, op
 const SCRIPTS = { linux: linuxScript, windows: windowsScript, synology: synologyScript };
 const SETUP_MAGIC = Buffer.from("BGSETUP1");
 
-export function createInstalls({ config, store, agentPackage, windowsSetup }) {
+export function createInstalls({ config, store, agentPackage, windowsSetup, updateKey = null }) {
   const links = new Map(); // token -> { code, clientName, expiresAt, options }
 
   function prune() {
@@ -311,6 +320,7 @@ export function createInstalls({ config, store, agentPackage, windowsSetup }) {
         clientName: link.clientName,
         expiresAt: link.expiresAt,
         options: link.options,
+        updateKeyB64: updateKey?.publicKeyB64 ?? null,
       });
     },
 
@@ -332,7 +342,7 @@ export function createInstalls({ config, store, agentPackage, windowsSetup }) {
 
     // The device enrolled with the code: the link is used up
     codeUsed(codeHash) {
-      for (const [token, link] of links) if (hashCode(link.code) === codeHash) links.delete(token);
+      for (const [token, link] of links) if (link.code && hashCode(link.code) === codeHash) links.delete(token);
     },
 
     // GET /install/<token>/agent.tar.gz or agent.zip

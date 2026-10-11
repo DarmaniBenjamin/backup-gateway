@@ -9,6 +9,7 @@ export const pages = {
   Integrity: () => import("./pages/Integrity.jsx"),
   Audit: () => import("./pages/Audit.jsx"),
   Offsite: () => import("./pages/Offsite.jsx"),
+  Security: () => import("./pages/Security.jsx"),
 };
 
 // Fetch them all quietly once the browser is idle

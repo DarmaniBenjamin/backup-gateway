@@ -38,10 +38,10 @@ main() {
   fi
   case "$PREFIX" in /volume[0-9]*/@backup-agent) ;; *) echo "Couldn't find the installed agent." >&2; exit 1 ;; esac
 
-  systemctl disable --now "$SERVICE" 2>/dev/null || true
-  rm -f "$UNIT"
+  systemctl disable --now "$SERVICE-update.path" "$SERVICE" 2>/dev/null || true
+  rm -f "$UNIT" "/etc/systemd/system/$SERVICE-update.service" "/etc/systemd/system/$SERVICE-update.path"
   systemctl daemon-reload 2>/dev/null || true
-  rm -rf "$PREFIX/app" "$PREFIX/node" "$PREFIX/agent.log"*
+  rm -rf "$PREFIX/app" "$PREFIX/node" "$PREFIX/updater" "$PREFIX/agent.log"*
   echo "Removed the $SERVICE service and its code."
 
   if [ "$PURGE" = yes ]; then

@@ -157,6 +157,10 @@ export function makeCatalog(conn, dataDir, { deviceId = null, destId = null } = 
     const files = [
       { name: "gateway.db", data: fs.readFileSync(tmp) },
       { name: "gateway-kx-key.pem", data: fs.readFileSync(path.join(dataDir, "gateway-kx-key.pem")) },
+      // The key agent updates are signed with: without it, devices would need reinstalling
+      ...(fs.existsSync(path.join(dataDir, "gateway-update-key.pem"))
+        ? [{ name: "gateway-update-key.pem", data: fs.readFileSync(path.join(dataDir, "gateway-update-key.pem")) }]
+        : []),
     ];
     const header = Buffer.from(
       JSON.stringify({

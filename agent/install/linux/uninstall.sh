@@ -25,8 +25,8 @@ esac
 
 [ "$(id -u)" -eq 0 ] || { echo "Run this with sudo." >&2; exit 1; }
 
-systemctl disable --now "$SERVICE" 2>/dev/null || true
-rm -f /etc/systemd/system/$SERVICE.service /etc/sysctl.d/90-backup-agent.conf
+systemctl disable --now "$SERVICE-update.path" "$SERVICE" 2>/dev/null || true
+rm -f /etc/systemd/system/$SERVICE.service /etc/systemd/system/$SERVICE-update.service /etc/systemd/system/$SERVICE-update.path /etc/sysctl.d/90-backup-agent.conf
 systemctl daemon-reload 2>/dev/null || true
 rm -rf /opt/backup-agent
 echo "Removed the $SERVICE service and its code."

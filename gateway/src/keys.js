@@ -30,3 +30,23 @@ export function loadOrCreateGatewayKeys(dataDir) {
     },
   };
 }
+// The gateway's Ed25519 key for signing agent updates. Each device's updater keeps the public half
+// (written there by the installer) and only installs an update this key signed, so even someone who
+// gets between the gateway and the device, or into the agent's own account, can't push code to it.
+export function loadOrCreateUpdateKey(dataDir) {
+  const keyPath = path.join(dataDir, "gateway-update-key.pem");
+  let privateKey;
+  if (fs.existsSync(keyPath)) {
+    privateKey = crypto.createPrivateKey(fs.readFileSync(keyPath));
+  } else {
+    ({ privateKey } = crypto.generateKeyPairSync("ed25519"));
+    fs.writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  }
+  const publicKey = crypto.createPublicKey(privateKey);
+  return {
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+    // The same public key as one base64 line (safe to pass to an install script)
+    publicKeyB64: publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+    sign: (data) => crypto.sign(null, Buffer.from(data), privateKey).toString("base64"),
+  };
+}

@@ -98,10 +98,10 @@ export function createCopies({ db, dataDir, storage }) {
     setPaused: conn.prepare("UPDATE offsite_destinations SET paused = ? WHERE id = ?"),
     remove: conn.prepare("DELETE FROM offsite_destinations WHERE id = ?"),
     okAllSince: conn.prepare(
-      "SELECT id, device_id, rel_path, chunk_ids FROM file_versions WHERE status = 'ok' AND chunk_ids IS NOT NULL AND id > ? ORDER BY id"
+      "SELECT id, device_id, rel_path, chunk_ids FROM file_versions WHERE status = 'ok' AND chunk_ids IS NOT NULL AND COALESCE(scan_status, '') <> 'pending' AND id > ? ORDER BY id"
     ),
     okDeviceSince: conn.prepare(
-      "SELECT id, device_id, rel_path, chunk_ids FROM file_versions WHERE device_id = ? AND status = 'ok' AND chunk_ids IS NOT NULL AND id > ? ORDER BY id"
+      "SELECT id, device_id, rel_path, chunk_ids FROM file_versions WHERE device_id = ? AND status = 'ok' AND chunk_ids IS NOT NULL AND COALESCE(scan_status, '') <> 'pending' AND id > ? ORDER BY id"
     ),
     isUploaded: conn.prepare("SELECT 1 FROM offsite_objects WHERE dest_id = ? AND device_id = ? AND chunk_id = ?"),
     boxSize: conn.prepare("SELECT box_size FROM chunks WHERE device_id = ? AND chunk_id = ?"),

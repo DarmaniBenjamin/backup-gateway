@@ -178,6 +178,12 @@ export function openDatabase(dataDir) {
     db.exec("ALTER TABLE file_versions ADD COLUMN reviewed_by TEXT");
     db.exec("ALTER TABLE file_versions ADD COLUMN reviewed_at TEXT");
   }
+  // Antivirus result per version (see scanner.js): clean / infected / too-big / pending / off
+  if (!versionColumns.includes("scan_status")) {
+    db.exec("ALTER TABLE file_versions ADD COLUMN scan_status TEXT");
+    db.exec("ALTER TABLE file_versions ADD COLUMN scan_signature TEXT");
+    db.exec("ALTER TABLE file_versions ADD COLUMN scanned_at TEXT");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_versions_status ON file_versions (device_id, status, received_at)");
   // For the activity charts (changes per device since a time) and the quarantine list
   db.exec("CREATE INDEX IF NOT EXISTS idx_versions_received ON file_versions (device_id, received_at)");
@@ -270,8 +276,8 @@ export function openDatabase(dataDir) {
     addVersion: db.prepare(`
       INSERT INTO file_versions
         (device_id, rel_path, version_no, type, size, sha256, mtime_ms, chunk_ids, agent_change_id, received_at,
-         status, entropy, reasons)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, entropy, reasons, scan_status, scan_signature, scanned_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     lastOkVersion: db.prepare(`
       SELECT * FROM file_versions WHERE device_id = ? AND rel_path = ? AND status = 'ok'
@@ -410,7 +416,8 @@ export function openDatabase(dataDir) {
         q.addVersion.run(
           deviceId, v.relPath, versionNo, type, v.size ?? null, v.sha256 ?? null,
           v.mtimeMs ?? null, v.chunkIds ? JSON.stringify(v.chunkIds) : null, v.changeId, now(),
-          v.status ?? "ok", v.entropy ?? null, v.reasons?.length ? JSON.stringify(v.reasons) : null
+          v.status ?? "ok", v.entropy ?? null, v.reasons?.length ? JSON.stringify(v.reasons) : null,
+          v.scan?.status ?? null, v.scan?.signature ?? null, v.scan && v.scan.status !== "pending" && v.scan.status !== "off" ? now() : null
         );
         db.exec("COMMIT");
         return versionNo;

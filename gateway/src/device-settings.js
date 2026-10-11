@@ -77,6 +77,18 @@ export function cleanAgentStatus(s) {
       s.dsmExport && typeof s.dsmExport === "object" && typeof s.dsmExport.dir === "string"
         ? { dir: s.dsmExport.dir.slice(0, 1024), lastAt: text(s.dsmExport.lastAt), error: text(s.dsmExport.error) }
         : null,
+    // Self-update: can this agent update itself, and how far along is an update
+    update:
+      s.update && typeof s.update === "object"
+        ? {
+            capable: bool(s.update.capable) ?? false,
+            mechanism: text(s.update.mechanism),
+            state: ["idle", "downloading", "staged", "applying", "failed", "done"].includes(s.update.state) ? s.update.state : "idle",
+            version: text(s.update.version),
+            error: text(s.update.error),
+            at: text(s.update.at),
+          }
+        : null,
     // Folder lock, as the device reports it (the device enforces it, not the gateway)
     lock:
       s.lock && typeof s.lock === "object"

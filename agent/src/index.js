@@ -13,6 +13,7 @@ import { createPolicy } from "./policy.js";
 import { createSnapshots } from "./snapshot.js";
 import { createLock } from "./lock.js";
 import { createDsmExport } from "./dsm-export.js";
+import { createUpdater } from "./updater.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -81,6 +82,9 @@ await folders.init();
 // Synology: export the DSM settings once a day, so they can be backed up too
 const dsmExport = createDsmExport();
 dsmExport.start();
+
+// Self-update: newer agents offered by the gateway are installed by the updater (see updater.js)
+const updater = createUpdater({ dataDir: config.dataDir, version });
 enqueue(() => {
   log.info(`${db.countFiles()} files tracked, ${db.countPending()} changes waiting to send`);
   uploader?.trigger();
@@ -94,7 +98,7 @@ try {
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
     folders: folders.report(),
-    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status() },
+    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status(), update: updater.status() },
   }));
 } catch (err) {
   log.error(err.message);
@@ -107,6 +111,8 @@ if (connection) {
   folders.attach(connection);
   connection.onFoldersVersion((v) => folders.checkVersion(v));
   connection.onBrowse((request) => folders.answerBrowse(request));
+  connection.onUpdate((offer, ctx) => updater.handle(offer, ctx));
+  connection.onOnline(() => updater.alive()); // a waiting updater knows this version came up fine
   folders.whenSynced(() => {
     uploader = createUploader({ db, tracker, connection, policy, snapshots });
     uploader.trigger();

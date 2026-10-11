@@ -113,3 +113,30 @@
   --color-series-delete: #d55fb3;     /* files deleted */
   --color-series-quarantine: #c98500; /* held back by the quarantine engine */
 }
+
+/* Security severities (Security page). Always shown with a label and icon, never colour alone.
+   Validated on the dark panels: adjacent pairs stay apart for colour-blind and normal vision. */
+@theme {
+  --color-sev-critical: #ff4f8b;
+  --color-sev-high: #ff8a3d;
+  --color-sev-medium: #f2d35b;
+  --color-sev-low: #5fa8ff;
+  --color-series-scan: #5b8cff; /* files scanned */
+}
+
+/* A new event sliding into the live feed (skipped when reduced motion is asked for) */
+@theme {
+  --animate-event-in: event-in 0.45s ease-out;
+  @keyframes event-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+      background-color: rgb(139 124 255 / 0.18);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      background-color: transparent;
+    }
+  }
+}

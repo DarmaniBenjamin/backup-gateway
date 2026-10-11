@@ -28,7 +28,8 @@ param(
   [string]$Allowed = "",
   [string]$Watch = "",
   [string]$Name = "",
-  [switch]$FullAccess
+  [switch]$FullAccess,
+  [string]$UpdateKey = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -206,6 +207,28 @@ try {
   }
   Ok "agent $agentVersion ready"
 
+  # ---- The updater: installs agent updates the gateway signed (SYSTEM and Administrators only) ----
+
+  $updDir = Join-Path $Prefix "updater"
+  $keyFile = Join-Path $updDir "update-key.pem"
+  New-Item -ItemType Directory -Path $updDir -Force | Out-Null
+  & icacls.exe $updDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /Q | Out-Null
+  if ($UpdateKey) {
+    if ($UpdateKey -notmatch '^[A-Za-z0-9+/]{40,120}={0,2}$') { throw "-UpdateKey doesn't look like the gateway's update key." }
+    $lines = for ($i = 0; $i -lt $UpdateKey.Length; $i += 64) { $UpdateKey.Substring($i, [Math]::Min(64, $UpdateKey.Length - $i)) }
+    $pem = (@("-----BEGIN PUBLIC KEY-----") + $lines + @("-----END PUBLIC KEY-----")) -join "`n"
+    [IO.File]::WriteAllText($keyFile, "$pem`n", (New-Object Text.UTF8Encoding $false))
+    & $nodeExe -e 'require("crypto").createPublicKey(require("fs").readFileSync(process.argv[1]))' $keyFile 2>$null
+    if ($LASTEXITCODE -ne 0) { Remove-Item $keyFile -Force; throw "-UpdateKey isn't a valid key." }
+  }
+  $updater = ""
+  if (Test-Path $keyFile) {
+    Copy-Item (Join-Path $Src "install\updater\update.mjs") (Join-Path $updDir "update.mjs") -Force
+    $updConf = @{ prefix = $Prefix; dataDir = $DataDir; platform = "windows"; service = $TaskName; node = $nodeExe } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText((Join-Path $updDir "updater.json"), $updConf, (New-Object Text.UTF8Encoding $false))
+    $updater = "windows-task"
+  }
+
   # ---- Settings and data folder: SYSTEM and Administrators only ----
 
   New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
@@ -222,7 +245,8 @@ try {
     "AGENT_DATA_DIR='$DataDir'",
     "AGENT_LOG_FILE='$LogFile'",
     "AGENT_LOG_LEVEL='$logLevel'",
-    "AGENT_ENROLL_CODE='$Code'"
+    "AGENT_ENROLL_CODE='$Code'",
+    "AGENT_UPDATER='$updater'"
   ) -join "`n"
   # UTF-8 without a BOM: Node would read a BOM as part of the first setting's name
   [IO.File]::WriteAllText($Conf, "$settings`n", (New-Object Text.UTF8Encoding $false))
@@ -249,6 +273,19 @@ try {
   if (-not $enrolled -and (Test-Path $LogFile)) { Move-Item $LogFile "$LogFile.previous" -Force }
   Start-ScheduledTask -TaskName $TaskName
   Ok "background task $TaskName installed and started"
+
+  # The updater's task: no schedule, the agent starts it when it has downloaded a signed update
+  if ($updater) {
+    $updAction = New-ScheduledTaskAction -Execute $nodeExe -WorkingDirectory $updDir `
+      -Argument """$(Join-Path $updDir 'update.mjs')"" ""$(Join-Path $updDir 'updater.json')"""
+    $updSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+      -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName "$($TaskName)Update" -Description "Backup agent updater: installs agent updates signed by the gateway" `
+      -Action $updAction -Principal $principal -Settings $updSettings -Force | Out-Null
+    Ok "automatic updates on (only updates signed by the gateway are installed)"
+  } else {
+    Write-Host "  (automatic updates are off: run the install command from the web UI once to turn them on)"
+  }
 
   # ---- Check that it enrolled ----
 

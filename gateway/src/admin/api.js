@@ -53,6 +53,8 @@ import { CloudError, cleanCloudSettings, testCloud, PROVIDERS } from "../cloud/o
 import { CopyError } from "../cloud/copies.js";
 import { startSignIn, finishSignIn, explainDrive, createDrive } from "../cloud/gdrive.js";
 import { cleanDestinations } from "../cloud/routing.js";
+import { securityRoutes } from "./security-api.js";
+import { updatesRoutes } from "./updates-api.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
 
@@ -85,7 +87,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates }) {
   const listingCache = new Map(); // folder listings, see GET /devices/:id/files
   function publicDevice(d, stats, storageRows = db.storageStats()) {
     const s = stats?.find((x) => x.device_id === d.id);
@@ -146,6 +148,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       const password = String(body.password ?? "");
       if (recentFailures(`ip:${ip}`).length >= 10 || recentFailures(`user:${username.toLowerCase()}`).length >= 5) {
         store.audit(username || "?", "login.blocked", null, ip);
+        security?.event("high", "admin.login-blocked", `Logins blocked for "${username || "?"}" from ${ip} after repeated wrong passwords`, { detail: { username, ip } });
         throw new ApiError(429, "Too many failed attempts. Wait 15 minutes and try again.");
       }
       const admin = username ? store.adminByName(username) : null;
@@ -154,6 +157,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         addFailure(`ip:${ip}`);
         addFailure(`user:${username.toLowerCase()}`);
         store.audit(username || "?", "login.failed", null, ip);
+        security?.event("medium", "admin.login-failed", `Wrong password for "${username || "?"}" from ${ip}`, { detail: { username, ip } });
         log.warn(`Admin login failed for "${username}" from ${ip}`);
         throw new ApiError(401, "Wrong username or password.");
       }
@@ -393,6 +397,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         size: v.size,
         entropy: v.entropy,
         reasons: v.reasons ? JSON.parse(v.reasons).map((r) => REASON_TEXT[r] ?? r) : [],
+        malware: v.scan_status === "infected" ? v.scan_signature : null,
         receivedAt: v.received_at,
       }));
     },
@@ -411,6 +416,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       db.unfreezeDevice(device.id);
       store.audit(admin.username, "device.unfrozen", { device: device.device_name, reason: device.frozen_reason }, ip);
       log.info(`Admin "${admin.username}" unfroze ${device.device_name}`);
+      security?.event("medium", "device.unfrozen", `${admin.username} unfroze ${device.device_name}`, { deviceId: device.id, detail: { by: admin.username, reason: device.frozen_reason } });
       return { ok: true };
     },
 
@@ -711,6 +717,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       entropy: v.entropy,
       receivedAt: v.received_at,
       reasons: v.reasons ? JSON.parse(v.reasons).map((r) => REASON_TEXT[r] ?? r) : [],
+      malware: v.scan_status === "infected" ? v.scan_signature : null,
       contentType: isDeleted ? "Deleted" : describeContent(sample, v.size),
       sample,
     };
@@ -1007,13 +1014,28 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     const ids = Array.isArray(body.ids) ? body.ids.filter(Number.isInteger).slice(0, 1000) : [];
     if (!ids.length) throw new ApiError(400, "No items selected.");
     let changed = 0;
-    for (const id of ids) if (db.reviewVersion(id, status, admin.username)) changed++;
+    for (const id of ids) {
+      const v = db.getVersion(id);
+      if (!db.reviewVersion(id, status, admin.username)) continue;
+      changed++;
+      const device = db.getDevice(v.device_id);
+      const infected = v.scan_status === "infected";
+      security?.event(
+        status === "ok" ? (infected ? "critical" : "medium") : "low",
+        status === "ok" ? "quarantine.released" : "quarantine.rejected",
+        `${admin.username} ${status === "ok" ? "released" : "rejected"} ${v.rel_path} from ${device?.device_name ?? v.device_id}${infected && status === "ok" ? ` despite ${v.scan_signature}` : ""}`,
+        { deviceId: v.device_id, versionId: v.id, detail: { by: admin.username, path: v.rel_path, signature: infected ? v.scan_signature : null } },
+      );
+    }
     if (status === "ok" && changed) copies.syncNow(); // released files go off-site now
     const action = status === "ok" ? "quarantine.released" : "quarantine.rejected";
     store.audit(admin.username, action, { count: changed }, ip);
     log.info(`Admin "${admin.username}" ${status === "ok" ? "released" : "rejected"} ${changed} quarantined version(s)`);
     return { changed };
   }
+
+  if (security) Object.assign(routes, securityRoutes({ db, security, scanner, broker, ApiError }));
+  if (updates) Object.assign(routes, updatesRoutes({ db, store, updates, installs, broker, ApiError, getDeviceOr404, log }));
 
   // Turn "GET /devices/:id/files" patterns into matchers
   const compiled = Object.entries(routes).map(([key, handler]) => {

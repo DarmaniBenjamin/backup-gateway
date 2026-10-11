@@ -115,6 +115,35 @@ npm run recover -- --from-folder ./backup-gateway-drive --to ./data
 It asks for the keys, then downloads and checks every backup. A device's own copy rebuilds a gateway
 with just that device in it.
 
+## Antivirus and the Security page
+
+Every file version that arrives is scanned with ClamAV (free) while the gateway rebuilds and checks
+it, so the decrypted file never touches the disk. Malware is held in quarantine like the ransomware
+checks do: it's never restored or sent off-site. Install ClamAV on the gateway computer:
+
+    sudo pacman -S clamav                                     # Arch / Omarchy
+    sudo freshclam
+    sudo systemctl enable --now clamav-freshclam clamav-daemon
+
+(On Debian or Ubuntu: sudo apt install clamav-daemon.) The gateway finds it by itself; backups that
+arrived before it was installed are scanned in the background. When ClamAV gets new signatures, the
+last 7 days of backups are scanned again, to catch malware that was too new to recognise at first.
+
+The **Security** page shows it live: the overall status, files scanned, malware and ransomware
+signs found, a timeline, top detections, devices by risk, and a feed of every security event (click
+one for its details). Rescans can be started there too.
+
+## Agent updates
+
+The gateway offers its agent version to every device running an older one: a few devices at a
+time, and only updates signed by the gateway's own update key are installed. On each device a
+separate updater (root on Linux and Synology, SYSTEM on Windows) checks the signature, installs the
+new version beside the old one, and puts the old one back if the new one doesn't connect within two
+minutes. Turn automatic updates off on the Devices page, or hold one device at its version.
+
+Agents installed before 0.15 don't have the updater yet: on the device's page, **Turn on automatic
+updates** gives a one-time command for it (it keeps the device's identity, folders and settings).
+
 ## Synology DSM settings
 
 On a Synology, the agent exports the DSM settings (users, groups, shared folders and their

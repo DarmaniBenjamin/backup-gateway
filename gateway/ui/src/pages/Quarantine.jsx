@@ -109,6 +109,11 @@ function HeldFile({ item, checked, onToggle, onInspect }) {
               {item.path}
             </p>
             <p className="mt-1 flex flex-wrap gap-1.5">
+              {item.malware && (
+                <span className="rounded border border-sev-critical/50 bg-sev-critical/10 px-1.5 py-0.5 font-mono text-xs text-sev-critical" title="What the antivirus recognised">
+                  {item.malware}
+                </span>
+              )}
               {item.reasons.map((r) => (
                 <span key={r} className="rounded border border-series-quarantine/40 px-1.5 py-0.5 text-xs text-fg">
                   {r}

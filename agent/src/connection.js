@@ -54,6 +54,8 @@ export async function connectToGateway(config, getStatus) {
   let commandHandler = null;
   let foldersHandler = null;
   let browseHandler = null;
+  let updateHandler = null;
+  let onlineHandler = null;
   let stopped = false;
 
   // Swap X25519 public keys with the gateway once, then derive the encryption keys.
@@ -81,7 +83,10 @@ export async function connectToGateway(config, getStatus) {
     try {
       const reply = await client.signedPost("/api/heartbeat", getStatus(), auth);
       const k = await ensureKeys();
-      if (online !== true) log.info("Connected to gateway");
+      if (online !== true) {
+        log.info("Connected to gateway");
+        onlineHandler?.();
+      }
       online = true;
 
       // Jobs arrive encrypted for this device only. Anything that doesn't decrypt is ignored.
@@ -109,6 +114,16 @@ export async function connectToGateway(config, getStatus) {
       }
 
       if (Number.isInteger(reply.foldersVersion)) foldersHandler?.(reply.foldersVersion);
+
+      // A newer agent offered by the gateway (see updater.js), encrypted for this device
+      if (reply.update) {
+        try {
+          const offer = JSON.parse(open(k.encKey, Buffer.from(reply.update, "base64"), `update:${identity.deviceId}`).toString("utf8"));
+          updateHandler?.(offer, { client, auth, identity, saveIdentity: (id) => saveIdentity(config.dataDir, id) });
+        } catch {
+          log.warn("Ignored an update offer: failed its integrity check");
+        }
+      }
     } catch (err) {
       if (err.security) {
         log.error(err.message);
@@ -156,6 +171,13 @@ export async function connectToGateway(config, getStatus) {
     },
     onBrowse: (fn) => {
       browseHandler = fn;
+    },
+    onUpdate: (fn) => {
+      updateHandler = fn;
+    },
+    onOnline: (fn) => {
+      onlineHandler = fn;
+      if (online === true) fn();
     },
     heartbeatNow: heartbeat,
     startLiveLink: () => liveLink(),

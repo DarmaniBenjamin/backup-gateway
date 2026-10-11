@@ -8,7 +8,7 @@
 import { REASON_TEXT } from "./inspect.js";
 import { log } from "./logger.js";
 
-export function createGuard({ db, config }) {
+export function createGuard({ db, config, security = null }) {
   const windowMs = config.freezeWindowMinutes * 60 * 1000;
 
   function alertOnce(device, kind, message) {
@@ -21,6 +21,7 @@ export function createGuard({ db, config }) {
     if (db.freezeDevice(device.id, reason)) {
       log.error(`FROZEN ${device.device_name} (${device.client_name}): ${reason}`);
       db.addAlert(device.id, "frozen", `${device.device_name} was frozen: ${reason}. New changes are quarantined until you review them.`);
+      security?.event("critical", "device.frozen", `${device.device_name} frozen: ${reason}`, { deviceId: device.id, detail: { reason, client: device.client_name } });
     }
   }
 
@@ -55,6 +56,7 @@ export function createGuard({ db, config }) {
         freeze(device, `${recent.deleted + 1} files deleted within ${config.freezeWindowMinutes} minutes`);
         const pulledBack = db.quarantineDeletesSince(device.id, since);
         log.warn(`${device.device_name}: ${pulledBack + 1} deletions quarantined, the files stay restorable`);
+        security?.event("high", "ransomware.mass-delete", `${pulledBack + 1} deletions on ${device.device_name} held back`, { deviceId: device.id, detail: { deletions: pulledBack + 1, windowMinutes: config.freezeWindowMinutes } });
         return { status: "quarantined", reasons: ["mass-delete"] };
       }
 

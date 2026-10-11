@@ -138,7 +138,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -195,7 +195,10 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
       pendingChanges: Number.isInteger(info.pendingChanges) ? info.pendingChanges : null,
     });
     for (const report of cleanFolderReports(info.folders)) db.saveFolderReport(device.id, report);
-    if (info.background) db.setAgentStatus(device.id, cleanAgentStatus(info.background));
+    const agentStatus = info.background ? cleanAgentStatus(info.background) : null;
+    if (agentStatus) db.setAgentStatus(device.id, agentStatus);
+    const reportedVersion = typeof info.agentVersion === "string" ? info.agentVersion.slice(0, 20) : null;
+    updates?.report(device, device.agent_version, reportedVersion, agentStatus);
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
 
     // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
@@ -216,7 +219,10 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
           sealed: seal(k.encKey, Buffer.from(JSON.stringify(b)), `browse:${device.id}:${b.id}`).toString("base64"),
         }))
       : [];
-    return send(res, 200, { ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0 });
+    // A newer agent, if this device should take it now (also encrypted for this device only)
+    const offer = k ? updates?.offerFor(device, reportedVersion, agentStatus) : null;
+    const update = offer ? seal(k.encKey, Buffer.from(JSON.stringify(offer)), `update:${device.id}`).toString("base64") : null;
+    return send(res, 200, { ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0, ...(update ? { update } : {}) });
   }
 
   // Live link: held open until there's work for this device, or WAIT_MS passes
@@ -397,7 +403,7 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
     return send(res, 201, { ok: true });
   }
 
-  function handleCommit(res, device, body) {
+  async function handleCommit(res, device, body) {
     const { encKey, idKey } = deviceKeys(device);
     let manifest;
     try {
@@ -434,6 +440,8 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
 
     const hash = crypto.createHash("sha256");
     const histogram = new Array(256).fill(0); // byte counts, for the ransomware checks
+    // Antivirus: the decrypted content streams to ClamAV as it's rebuilt (never written to disk)
+    const scan = scanner ? scanner.stream() : null;
     let header = Buffer.alloc(0);
     let total = 0;
     for (const id of chunkIds) {
@@ -449,25 +457,30 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
         log.error(`Stored chunk ${id.slice(0, 12)}… for ${device.device_name} is corrupted — removed, agent will resend it`);
         storage.deleteChunk(device.id, id);
         db.removeChunk(device.id, id);
+        scan?.abort();
         throw new HttpError(409, "A stored chunk was corrupted and has been removed; resend it");
       }
       hash.update(plaintext);
+      await scan?.write(plaintext);
       for (let i = 0; i < plaintext.length; i++) histogram[plaintext[i]]++;
       if (header.length < 16) header = Buffer.concat([header, plaintext.subarray(0, 16 - header.length)]);
       total += plaintext.length;
     }
     if (total !== size || hash.digest("hex") !== sha256) {
+      scan?.abort();
       log.warn(`${device.device_name}: ${relPath} failed integrity check — not saved`);
       throw new HttpError(422, "File failed integrity check");
     }
 
-    // Ransomware checks on the real content, then let the guard decide ok / quarantined
+    // Antivirus verdict, then the ransomware checks on the real content, then the guard decides
+    const scanned = scan ? await scan.end() : { status: "off" };
     const previous = db.lastOkVersion(device.id, relPath);
     const inspection = inspectFile({ relPath, size, header, histogram, previous });
+    const reasons = scanned.status === "infected" ? ["malware", ...inspection.reasons] : inspection.reasons;
     const verdict = guard.decide(db.getDevice(device.id), {
       relPath,
       type,
-      reasons: inspection.reasons,
+      reasons,
       sameAsLastGood: previous?.sha256 === sha256,
     });
 
@@ -476,8 +489,32 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
       mtimeMs: Number.isFinite(mtimeMs) ? Math.round(mtimeMs) : null,
       chunkIds,
       entropy: inspection.entropy,
+      scan: scanned,
       ...verdict,
     });
+    security?.countStat({
+      scanned: scanned.status === "clean" || scanned.status === "infected" ? 1 : 0,
+      bytes: scanned.status === "clean" || scanned.status === "infected" ? size : 0,
+      infected: scanned.status === "infected" ? 1 : 0,
+      suspicious: inspection.reasons.length ? 1 : 0,
+      skipped: scanned.status === "too-big" ? 1 : 0,
+      ms: scanned.ms ?? 0,
+    });
+    if (security && (scanned.status === "infected" || inspection.reasons.length)) {
+      const versionId = db.versionByChange(device.id, changeId)?.id ?? null;
+      const detail = { path: relPath, size, sha256, version, entropy: inspection.entropy, reasons, status: verdict.status, client: device.client_name };
+      if (scanned.status === "infected") {
+        log.error(`${device.device_name}: ${relPath} is infected (${scanned.signature}), quarantined`);
+        security.event("critical", "malware.detected", `${scanned.signature} found in ${relPath} on ${device.device_name}`, {
+          deviceId: device.id, versionId, detail: { ...detail, signature: scanned.signature },
+        });
+        db.addAlert(device.id, "malware", `Malware (${scanned.signature}) was found in ${relPath} from ${device.device_name}. It's in quarantine and won't be restored or sent off-site.`);
+      } else {
+        security.event(verdict.status === "quarantined" ? "high" : "medium", "ransomware.suspicious", `Ransomware signs in ${relPath} on ${device.device_name}`, {
+          deviceId: device.id, versionId, detail,
+        });
+      }
+    }
     if (verdict.status === "ok") {
       log.info(`${device.device_name}: ${relPath} ${type} (v${version}, ${chunkIds.length} chunk(s), sha256 verified)`);
     }
@@ -533,6 +570,9 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
       else if (req.method === "POST" && url === "/api/folders/sync") [route, limit] = ["folders", LIMIT_SMALL * 4];
       else if (req.method === "POST" && url === "/api/browse/result") [route, limit] = ["browse", 4 * 1024 * 1024];
       else if (req.method === "GET" && url === "/api/wait") [route, limit] = ["wait", 0];
+      else if (req.method === "GET" && (url === "/api/update/agent.tar.gz" || url === "/api/update/agent.zip")) {
+        [route, limit, match] = ["update", 0, url.endsWith(".zip") ? "zip" : "tar"];
+      }
       else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/manifest$/))) {
         [route, limit, jobIdParam] = ["manifest", 0, Number(match[1])];
       } else if (req.method === "GET" && (match = url.match(/^\/api\/restore\/(\d+)\/chunks\/([a-f0-9]{64})$/))) {
@@ -553,13 +593,19 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
         case "kx": return handleKeyExchange(res, device, body);
         case "check": return handleCheckChunks(res, device, body);
         case "put": return handlePutChunk(res, device, body, chunkIdParam);
-        case "commit": return handleCommit(res, device, body);
+        case "commit": return await handleCommit(res, device, body);
         case "result": return handleCommandResult(res, device, body);
         case "manifest": return handleRestoreManifest(res, device, jobIdParam);
         case "restore-chunk": return handleRestoreChunk(res, device, jobIdParam, chunkIdParam);
         case "wait": return await handleWait(req, res, device);
         case "folders": return handleFolderSync(res, device, body);
         case "browse": return handleBrowseResult(res, device, body);
+        case "update": {
+          // The agent package, for an update (the agent and its updater check it against the signed manifest)
+          if (!agentPackage) return send(res, 404, { error: "No agent package on this gateway" });
+          log.info(`${device.device_name}: downloading agent ${agentPackage.version} for an update`);
+          return sendBinary(res, 200, match === "zip" ? agentPackage.zip : agentPackage.tarGz);
+        }
       }
     } catch (err) {
       if (err instanceof AuthError) {

@@ -153,6 +153,9 @@ console.log(`Catalog from ${catalog.header.createdAt} unlocked${catalog.header.d
 fs.mkdirSync(to, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(to, "gateway.db"), catalog.files["gateway.db"], { mode: 0o600 });
 fs.writeFileSync(path.join(to, "gateway-kx-key.pem"), catalog.files["gateway-kx-key.pem"], { mode: 0o600 });
+if (catalog.files["gateway-update-key.pem"]) {
+  fs.writeFileSync(path.join(to, "gateway-update-key.pem"), catalog.files["gateway-update-key.pem"], { mode: 0o600 });
+}
 
 // ---- 2. Every chunk the "ok" versions need, checked with the device's key as it arrives --------
 

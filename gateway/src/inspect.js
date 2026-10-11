@@ -160,4 +160,5 @@ export const REASON_TEXT = {
   "became-random": "File turned into random data",
   "device-frozen": "Device was frozen when this arrived",
   "mass-delete": "Part of a mass deletion",
+  malware: "Antivirus found malware",
 };

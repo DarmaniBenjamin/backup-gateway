@@ -25,6 +25,9 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
   exit 1
 }
 
+if (Get-ScheduledTask -TaskName "$($TaskName)Update" -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName "$($TaskName)Update" -Confirm:$false
+}
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
