@@ -103,6 +103,55 @@ export function inspectFile({ relPath, size, header, histogram, previous }) {
   return { entropy: Math.round(entropy * 1000) / 1000, reasons };
 }
 
+// What a file really is, judged from its content (not its name). Used by the Inspect panel.
+const TYPE_LABEL = {
+  pdf: "PDF document",
+  zip: "ZIP container (Word, Excel, PowerPoint or .zip)",
+  png: "PNG image",
+  jpg: "JPEG image",
+  gif: "GIF image",
+  ole: "Old Office document (.doc, .xls, .ppt, .msg)",
+  rar: "RAR archive",
+  "7z": "7-Zip archive",
+  gz: "Gzip archive",
+};
+
+export function describeContent(sample, totalSize) {
+  if (!sample.length) return "Empty file";
+  for (const [type, sigs] of Object.entries(SIGNATURES)) {
+    if (sigs.some((sig) => sig.every((byte, i) => sample[i] === byte))) return TYPE_LABEL[type];
+  }
+  const histogram = new Array(256).fill(0);
+  for (const b of sample) histogram[b]++;
+  const size = sample.length;
+  if (size >= MIN_SIZE_FOR_ENTROPY && entropyOf(histogram, size) >= randomThreshold(size)) {
+    return "Random-looking data (encrypted or compressed)";
+  }
+  if (isText(sample)) return "Plain text";
+  return totalSize > 0 ? "Binary data (unknown type)" : "Empty file";
+}
+
+// Readable text: valid UTF-8 with almost no control characters
+export function isText(sample) {
+  // The sample may end in the middle of a multi-byte character, so allow up to 3 bytes to be cut off
+  let text = null;
+  for (let cut = 0; cut <= 3 && text === null; cut++) {
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(sample.subarray(0, sample.length - cut));
+    } catch {
+      text = null;
+    }
+  }
+  if (text === null) return false;
+  if (!text.length) return true;
+  let control = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0);
+    if (c < 32 && c !== 9 && c !== 10 && c !== 13) control++;
+  }
+  return control / text.length < 0.02;
+}
+
 export const REASON_TEXT = {
   "ransom-extension": "Renamed with a ransomware extension",
   "ransom-note": "Looks like a ransom note",

@@ -5,13 +5,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router";
-import { History, ShieldCheck, Snowflake } from "lucide-react";
+import { History, ScanSearch, ShieldCheck, Snowflake } from "lucide-react";
 import { api } from "../api.js";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
 import LoadState from "../components/LoadState.jsx";
 import Modal from "../components/Modal.jsx";
+import InspectModal from "../components/InspectModal.jsx";
 import { primaryButton, secondaryButton } from "../components/buttons.js";
 
 const dangerButton =
@@ -97,10 +98,10 @@ function UnfreezeDialog({ device, onClose, onDone }) {
 
 // ---------- Held files ----------
 
-function HeldFile({ item, checked, onToggle }) {
+function HeldFile({ item, checked, onToggle, onInspect }) {
   return (
-    <li>
-      <label className="flex cursor-pointer gap-3 px-5 py-3 hover:bg-raised/40">
+    <li className="flex items-start hover:bg-raised/40">
+      <label className="flex min-w-0 flex-1 cursor-pointer gap-3 py-3 pl-5 pr-3">
         <input type="checkbox" className={`${checkboxClass} mt-1`} checked={checked} onChange={() => onToggle(item.id)} />
         <div className="grid min-w-0 flex-1 gap-1 md:grid-cols-[minmax(0,1fr)_auto] md:gap-6">
           <div className="min-w-0">
@@ -135,11 +136,19 @@ function HeldFile({ item, checked, onToggle }) {
           </div>
         </div>
       </label>
+      <button
+        type="button"
+        onClick={() => onInspect(item.id)}
+        className="mr-4 mt-2.5 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-edge px-3 text-sm text-fg hover:border-signal/50 hover:bg-raised"
+      >
+        <ScanSearch size={15} aria-hidden="true" />
+        Inspect
+      </button>
     </li>
   );
 }
 
-function DeviceGroup({ name, client, items, selected, onToggle, onToggleAll }) {
+function DeviceGroup({ name, client, items, selected, onToggle, onToggleAll, onInspect }) {
   const allChecked = items.every((i) => selected.has(i.id));
   const someChecked = !allChecked && items.some((i) => selected.has(i.id));
   return (
@@ -161,7 +170,7 @@ function DeviceGroup({ name, client, items, selected, onToggle, onToggleAll }) {
       </div>
       <ul className="divide-y divide-edge overflow-hidden rounded-lg border border-edge bg-surface">
         {items.map((item) => (
-          <HeldFile key={item.id} item={item} checked={selected.has(item.id)} onToggle={onToggle} />
+          <HeldFile key={item.id} item={item} checked={selected.has(item.id)} onToggle={onToggle} onInspect={onInspect} />
         ))}
       </ul>
     </section>
@@ -263,7 +272,8 @@ export default function Quarantine() {
   const held = usePolling("/quarantine", 15000);
   const devices = usePolling("/devices", 15000);
   const [selected, setSelected] = useState(() => new Set());
-  const [review, setReview] = useState(null); // "release" | "reject"
+  const [review, setReview] = useState(null); // { action: "release" | "reject", ids }
+  const [inspecting, setInspecting] = useState(null); // id of the file being inspected
   const [unfreezing, setUnfreezing] = useState(null);
 
   // Forget selections for items that are no longer in quarantine
@@ -350,7 +360,14 @@ export default function Quarantine() {
       ) : (
         <div className="space-y-8">
           {groups.map(([deviceId, g]) => (
-            <DeviceGroup key={deviceId} {...g} selected={selected} onToggle={toggle} onToggleAll={toggleAll} />
+            <DeviceGroup
+              key={deviceId}
+              {...g}
+              selected={selected}
+              onToggle={toggle}
+              onToggleAll={toggleAll}
+              onInspect={setInspecting}
+            />
           ))}
         </div>
       )}
@@ -368,10 +385,10 @@ export default function Quarantine() {
               </button>
             </p>
             <div className="flex gap-2">
-              <button type="button" className={secondaryButton} onClick={() => setReview("release")}>
+              <button type="button" className={secondaryButton} onClick={() => setReview({ action: "release", ids: [...selected] })}>
                 Release
               </button>
-              <button type="button" className={dangerButton} onClick={() => setReview("reject")}>
+              <button type="button" className={dangerButton} onClick={() => setReview({ action: "reject", ids: [...selected] })}>
                 Reject
               </button>
             </div>
@@ -381,13 +398,23 @@ export default function Quarantine() {
 
       {review && (
         <ReviewDialog
-          action={review}
-          ids={[...selected]}
+          action={review.action}
+          ids={review.ids}
           onClose={() => setReview(null)}
           onDone={() => {
             setReview(null);
             setSelected(new Set());
             refreshAll();
+          }}
+        />
+      )}
+      {inspecting != null && (
+        <InspectModal
+          id={inspecting}
+          onClose={() => setInspecting(null)}
+          onDecide={(action, id) => {
+            setInspecting(null);
+            setReview({ action, ids: [id] });
           }}
         />
       )}

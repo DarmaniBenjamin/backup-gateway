@@ -16,6 +16,7 @@
 //   GET  /admin/api/verify/last
 //   GET  /admin/api/audit
 //   GET  /admin/api/quarantine                 versions held back as suspected ransomware
+//   GET  /admin/api/quarantine/:id/inspect     safe preview of a held file + its last good version
 //   POST /admin/api/quarantine/release         { ids } → become normal versions
 //   POST /admin/api/quarantine/reject          { ids } → kept as evidence, never restorable
 //   POST /admin/api/devices/:id/unfreeze       resume normal backups for a frozen device
@@ -32,7 +33,8 @@ import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
 import { runVerify } from "../verify.js";
 import { verifyPassword, burnTime } from "./passwords.js";
-import { REASON_TEXT } from "../inspect.js";
+import { REASON_TEXT, describeContent, isText } from "../inspect.js";
+import { chunkId as makeChunkId, open } from "../crypto-box.js";
 import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
 } from "../folders.js";
@@ -159,7 +161,17 @@ export function createAdminApi({ db, store, keys, storage, config, broker }) {
 
     "GET /overview"() {
       const stats = store.versionStats();
-      const devices = db.listDevices().map((d) => publicDevice(d, stats));
+      // Last 24 hours of changes per device, in 2-hour slots, for the activity bars on each device card
+      const SLOT_MS = 2 * 3600 * 1000;
+      const start = Date.now() - 12 * SLOT_MS;
+      const devices = db.listDevices().map((d) => {
+        const activity = Array.from({ length: 12 }, () => ({ ok: 0, held: 0 }));
+        for (const r of store.activitySince(d.id, new Date(start).toISOString())) {
+          const slot = activity[Math.min(11, Math.floor((new Date(r.received_at) - start) / SLOT_MS))];
+          if (slot) r.status === "ok" ? slot.ok++ : slot.held++;
+        }
+        return { ...publicDevice(d, stats), activity };
+      });
       const storageRows = db.storageStats();
       return {
         devices: {
@@ -556,6 +568,85 @@ export function createAdminApi({ db, store, keys, storage, config, broker }) {
       return { ok: true };
     },
   });
+
+  // First bytes of a stored file version, decrypted in memory only (never written anywhere)
+  const PREVIEW_BYTES = 64 * 1024;
+  function readStart(device, version, bytes) {
+    const ids = version.chunk_ids ? JSON.parse(version.chunk_ids) : [];
+    if (!ids.length) return Buffer.alloc(0);
+    const k = keys.forDevice(device);
+    if (!k) throw new ApiError(409, "This device's encryption keys aren't set up.");
+    const parts = [];
+    let have = 0;
+    for (const id of ids) {
+      let plain;
+      try {
+        plain = open(k.encKey, storage.readChunk(device.id, id), `chunk:${id}`);
+        if (makeChunkId(k.idKey, plain) !== id) throw new Error("mismatch");
+      } catch {
+        throw new ApiError(500, "A stored chunk of this file is damaged or missing. Run an integrity check.");
+      }
+      parts.push(plain);
+      have += plain.length;
+      if (have >= bytes) break;
+    }
+    return Buffer.concat(parts).subarray(0, bytes);
+  }
+
+  function summary(device, v) {
+    if (!v) return null;
+    const isDeleted = v.type === "deleted";
+    const sample = isDeleted ? Buffer.alloc(0) : readStart(device, v, PREVIEW_BYTES);
+    return {
+      versionNo: v.version_no,
+      type: v.type,
+      status: v.status,
+      size: v.size,
+      sha256: v.sha256,
+      entropy: v.entropy,
+      receivedAt: v.received_at,
+      reasons: v.reasons ? JSON.parse(v.reasons).map((r) => REASON_TEXT[r] ?? r) : [],
+      contentType: isDeleted ? "Deleted" : describeContent(sample, v.size),
+      sample,
+    };
+  }
+
+  // Shown as plain characters or a hex dump. Nothing in the file is opened, rendered or run.
+  function previewOf(sample, size) {
+    if (!sample.length) return null;
+    if (isText(sample)) {
+      return { kind: "text", text: sample.toString("utf8").replace(/\uFFFD+$/, ""), truncated: size > sample.length };
+    }
+    const hexBytes = sample.subarray(0, 4096);
+    const lines = [];
+    for (let i = 0; i < hexBytes.length; i += 16) {
+      const row = hexBytes.subarray(i, i + 16);
+      const hex = [...row].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+      const ascii = [...row].map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
+      lines.push(`${i.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
+    }
+    return { kind: "hex", text: lines.join("\n"), truncated: size > hexBytes.length };
+  }
+
+  routes["GET /quarantine/:id/inspect"] = ({ params, admin, ip }) => {
+    const v = db.getVersion(Number(params.id));
+    if (!v || v.status !== "quarantined") throw new ApiError(404, "This file is no longer in quarantine.");
+    const device = getDeviceOr404(v.device_id);
+    const held = summary(device, v);
+    const lastGood = summary(device, db.lastOkVersion(device.id, v.rel_path));
+    store.audit(admin.username, "quarantine.inspected", { device: device.device_name, path: v.rel_path, version: v.version_no }, ip);
+    const strip = (s) => s && (({ sample, ...rest }) => rest)(s);
+    return {
+      id: v.id,
+      path: v.rel_path,
+      device: device.device_name,
+      client: device.client_name,
+      held: strip(held),
+      lastGood: strip(lastGood),
+      preview: previewOf(held.sample, v.size),
+      lastGoodPreview: lastGood ? previewOf(lastGood.sample.subarray(0, 4096), lastGood.size) : null,
+    };
+  };
 
   // Release (status "ok") or reject quarantined versions
   function review(body, status, admin, ip) {
