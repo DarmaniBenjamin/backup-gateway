@@ -12,6 +12,7 @@ import Quarantine from "./pages/Quarantine.jsx";
 import Jobs from "./pages/Jobs.jsx";
 import Integrity from "./pages/Integrity.jsx";
 import Audit from "./pages/Audit.jsx";
+import Offsite from "./pages/Offsite.jsx";
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="restore" element={<Restore />} />
         <Route path="quarantine" element={<Quarantine />} />
         <Route path="jobs" element={<Jobs />} />
+        <Route path="offsite" element={<Offsite />} />
         <Route path="integrity" element={<Integrity />} />
         <Route path="audit" element={<Audit />} />
         <Route path="*" element={<Navigate to="/" replace />} />

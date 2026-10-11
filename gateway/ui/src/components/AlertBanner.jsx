@@ -1,9 +1,9 @@
 // Shown across the top of every page while there are alerts nobody has dismissed yet:
-// a device was frozen, or suspicious files were quarantined.
+// a device was frozen, suspicious files were quarantined, or off-site backups keep failing.
 
 import { useState } from "react";
 import { Link } from "react-router";
-import { ShieldAlert, Snowflake, X } from "lucide-react";
+import { CloudOff, ShieldAlert, Snowflake, X } from "lucide-react";
 import { api } from "../api.js";
 import { timeAgo } from "../format.js";
 
@@ -31,7 +31,8 @@ export default function AlertBanner({ alerts, onChange }) {
   return (
     <div className="mb-6 space-y-2" role="region" aria-label="Alerts">
       {open.slice(0, SHOW).map((a) => {
-        const Icon = a.kind === "frozen" ? Snowflake : ShieldAlert;
+        const Icon = a.kind === "frozen" ? Snowflake : a.kind === "cloud" ? CloudOff : ShieldAlert;
+        const link = a.kind === "cloud" ? "/offsite" : "/quarantine";
         return (
           <div key={a.id} className="flex items-start gap-3 rounded-lg border border-alert/40 bg-alert/10 py-3 pl-4 pr-2">
             <Icon size={18} className="mt-0.5 shrink-0 text-alert" aria-hidden="true" />
@@ -40,7 +41,7 @@ export default function AlertBanner({ alerts, onChange }) {
               <p className="mt-0.5 text-dim">
                 {a.client ? `${a.client}, ` : ""}
                 {timeAgo(a.createdAt)}.{" "}
-                <Link to="/quarantine" className="text-signal underline-offset-2 hover:underline">
+                <Link to={link} className="text-signal underline-offset-2 hover:underline">
                   Review
                 </Link>
               </p>

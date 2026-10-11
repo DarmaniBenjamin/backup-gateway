@@ -29,6 +29,13 @@
 //   POST /admin/api/devices/:id/folders/:folderId/excludes  { excludes }
 //   POST /admin/api/devices/:id/folders/:folderId/remove    stop backing it up (backups are kept)
 //   POST /admin/api/devices/:id/settings                    background settings (speed limits, pauses...)
+//   GET  /admin/api/cloud                      off-site copy: settings and progress
+//   POST /admin/api/cloud/test                 { settings } check them without saving
+//   POST /admin/api/cloud/connect              { settings } -> recovery key (shown once)
+//   POST /admin/api/cloud/key                  { keyId, secret } replace the access key
+//   POST /admin/api/cloud/pause                { paused }
+//   POST /admin/api/cloud/sync                 check everything and upload now
+//   POST /admin/api/cloud/disconnect           { bucket } stop sending (nothing in the bucket is touched)
 
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
@@ -41,6 +48,7 @@ import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
 } from "../folders.js";
 import { SettingsError, cleanSettings, settingsOf } from "../device-settings.js";
+import { CloudError, cleanCloudSettings, testCloud } from "../cloud/offsite.js";
 import { log } from "../logger.js";
 
 const ONLINE_WINDOW_MS = 90_000; // seen within 90 s (3 missed heartbeats) = online
@@ -72,7 +80,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, offsite }) {
   function publicDevice(d, stats) {
     const s = stats?.find((x) => x.device_id === d.id);
     const storageRow = db.storageStats().find((x) => x.device_id === d.id);
@@ -640,6 +648,92 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     return { kind: "hex", text: lines.join("\n"), truncated: size > hexBytes.length };
   }
 
+  // ---------- Off-site copy ----------
+
+  function cloudSettings(body) {
+    try {
+      return cleanCloudSettings(body ?? {});
+    } catch (err) {
+      if (err instanceof CloudError) throw new ApiError(400, err.message);
+      throw err;
+    }
+  }
+  async function cloudTest(settings) {
+    try {
+      await testCloud(settings);
+    } catch (err) {
+      if (err instanceof CloudError) throw new ApiError(400, err.message);
+      throw err;
+    }
+  }
+  const requireCloud = () => {
+    const c = offsite.config();
+    if (!c) throw new ApiError(409, "Off-site backups aren't connected.");
+    return c;
+  };
+
+  Object.assign(routes, {
+    "GET /cloud"() {
+      return offsite.status();
+    },
+
+    async "POST /cloud/test"({ body }) {
+      await cloudTest(cloudSettings(body.settings));
+      return { ok: true };
+    },
+
+    async "POST /cloud/connect"({ body, admin, ip }) {
+      const settings = cloudSettings(body.settings);
+      await cloudTest(settings);
+      let result;
+      try {
+        result = offsite.connect(settings, admin.username);
+      } catch (err) {
+        if (err instanceof CloudError) throw new ApiError(409, err.message);
+        throw err;
+      }
+      store.audit(admin.username, "cloud.connected", {
+        provider: settings.provider, endpoint: settings.endpoint, bucket: settings.bucket, lockMode: settings.lockMode,
+        retentionDays: settings.retentionDays, recoveryKey: result.fingerprint,
+      }, ip);
+      return result;
+    },
+
+    async "POST /cloud/key"({ body, admin, ip }) {
+      const c = requireCloud();
+      const settings = cloudSettings({
+        provider: c.provider, endpoint: c.endpoint, region: c.region, bucket: c.bucket, lockMode: c.lock_mode,
+        retentionDays: c.retention_days, keyId: body.keyId, secret: body.secret,
+      });
+      await cloudTest(settings);
+      offsite.replaceKey(settings.keyId, settings.secret);
+      store.audit(admin.username, "cloud.key-replaced", { keyId: settings.keyId }, ip);
+      return offsite.status();
+    },
+
+    "POST /cloud/pause"({ body, admin, ip }) {
+      requireCloud();
+      offsite.setPaused(!!body.paused);
+      store.audit(admin.username, body.paused ? "cloud.paused" : "cloud.resumed", {}, ip);
+      return offsite.status();
+    },
+
+    "POST /cloud/sync"() {
+      requireCloud();
+      offsite.syncNow();
+      return { ok: true };
+    },
+
+    "POST /cloud/disconnect"({ body, admin, ip }) {
+      const c = requireCloud();
+      if (String(body.bucket ?? "").trim() !== c.bucket) throw new ApiError(400, "Type the bucket name exactly to confirm.");
+      offsite.disconnect();
+      store.audit(admin.username, "cloud.disconnected", { bucket: c.bucket }, ip);
+      log.warn(`Admin "${admin.username}" disconnected off-site backups from ${c.bucket}`);
+      return { ok: true };
+    },
+  });
+
   routes["GET /quarantine/:id/inspect"] = ({ params, admin, ip }) => {
     const v = db.getVersion(Number(params.id));
     if (!v || v.status !== "quarantined") throw new ApiError(404, "This file is no longer in quarantine.");
@@ -666,6 +760,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     if (!ids.length) throw new ApiError(400, "No items selected.");
     let changed = 0;
     for (const id of ids) if (db.reviewVersion(id, status, admin.username)) changed++;
+    if (status === "ok" && changed) offsite?.syncNow(); // released files go off-site now
     const action = status === "ok" ? "quarantine.released" : "quarantine.rejected";
     store.audit(admin.username, action, { count: changed }, ip);
     log.info(`Admin "${admin.username}" ${status === "ok" ? "released" : "rejected"} ${changed} quarantined version(s)`);

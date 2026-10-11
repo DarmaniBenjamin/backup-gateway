@@ -34,6 +34,24 @@ file so it can back it up, but can only write inside the allowed folders (for re
 of the system is read-only to it. To remove it: `sudo /opt/backup-agent/uninstall.sh` (add `--purge`
 to also delete the device's identity). Windows, Mac and Synology installers are coming.
 
+## Off-site copy (Backblaze B2 and other S3 storage)
+
+On the **Off-site** page, connect a bucket that has **Object Lock** turned on (Backblaze B2, Wasabi,
+Amazon S3 or any S3-compatible storage). The gateway then uploads every clean backup there, locked
+for the number of days you choose, so nobody can delete or change it before then — not ransomware,
+not someone with the gateway's key. Chunks still in use are re-locked before their lock runs out.
+Everything uploaded is already encrypted; quarantined files are never sent.
+
+When you connect, you get a **recovery key** (`BGRK-…`), shown once. Keep it offline. If the gateway
+is ever lost, rebuild it from the cloud on a new machine:
+
+```bash
+cd gateway
+npm run recover -- --endpoint https://s3.us-west-004.backblazeb2.com --bucket YOUR-BUCKET --key-id YOUR-KEY-ID --to ./data
+```
+
+It asks for the bucket's application key and the recovery key, then downloads and checks every backup.
+
 ## Status
 
 Early development — running locally.

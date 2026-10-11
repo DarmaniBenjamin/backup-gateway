@@ -11,6 +11,7 @@ import { createGuard } from "./guard.js";
 import { createBroker } from "./broker.js";
 import { buildAgentPackage } from "./agent-package.js";
 import { createInstalls } from "./installs.js";
+import { createOffsite } from "./cloud/offsite.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -39,7 +40,9 @@ try {
 if (!agentPackage) log.warn(`Agent folder not found at ${config.agentDir}: one-line installs are off (set GATEWAY_AGENT_DIR)`);
 const installs = createInstalls({ config, store, agentPackage });
 const server = createServer({ db, keys, storage, guard, broker, installs });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs });
+const offsite = createOffsite({ db, dataDir: config.dataDir, storage });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, offsite });
+offsite.start();
 
 function onListenError(name, port) {
   return (err) => {
@@ -68,6 +71,7 @@ adminServer.listen(config.adminPort, config.adminHost, () => {
 
 function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
+  offsite.stop();
   adminServer.close();
   server.close(() => {
     db.close();

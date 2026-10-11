@@ -16,6 +16,7 @@ const NAV = [
   { to: "/devices", label: "Devices" },
   { to: "/restore", label: "Restore" },
   { to: "/quarantine", label: "Quarantine" },
+  { to: "/offsite", label: "Off-site" },
   { to: "/jobs", label: "Jobs" },
   { to: "/integrity", label: "Integrity" },
   { to: "/audit", label: "Audit log" },
@@ -101,7 +102,7 @@ export default function Layout() {
   return (
     <div className="min-h-dvh">
       <header className="glass sticky top-0 z-30 border-b border-edge">
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link to="/" className="flex shrink-0 items-center gap-2.5">
             <Logo size={30} />
             <span className="font-display text-[17px] font-semibold">Backup Gateway</span>
@@ -115,14 +116,16 @@ export default function Layout() {
             ))}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
             {openAlerts > 0 && (
               <Link
                 to="/quarantine"
+                aria-label={`${openAlerts} open alert${openAlerts === 1 ? "" : "s"}`}
                 className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-alert/40 bg-alert/15 px-3 text-xs font-medium text-alert hover:bg-alert/25"
               >
                 <ShieldAlert size={14} aria-hidden="true" />
-                {openAlerts} alert{openAlerts === 1 ? "" : "s"}
+                {openAlerts}
+                <span className="hidden sm:inline">alert{openAlerts === 1 ? "" : "s"}</span>
               </Link>
             )}
             <AccountMenu user={user} onLogout={logout} />

@@ -1,6 +1,6 @@
 {
   "name": "backup-gateway-server",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Backup gateway: enrolls agents, receives changes, versions, checks and uploads",
   "type": "module",
   "main": "src/index.js",
@@ -13,6 +13,7 @@
     "restore": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/restore.js",
     "jobs": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/jobs.js",
     "verify": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/verify.js",
+    "recover": "node --disable-warning=ExperimentalWarning src/cli/recover.js",
     "create-admin": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/create-admin.js"
   },
   "engines": {
