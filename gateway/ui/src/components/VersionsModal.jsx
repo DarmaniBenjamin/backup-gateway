@@ -52,7 +52,7 @@ export default function VersionsModal({ deviceId, path, onRestore, onClose }) {
                     </p>
                     {status && v.reasons.length > 0 && <p className="mt-0.5 text-xs text-dim">{v.reasons.join(" · ")}</p>}
                     {v.sha256 && (
-                      <p className="truncate font-mono text-xs text-dim" title={`SHA-256 ${v.sha256}`}>
+                      <p className="truncate font-mono text-xs text-secure/70" title={`SHA-256 ${v.sha256}`}>
                         {v.sha256.slice(0, 16)}
                       </p>
                     )}

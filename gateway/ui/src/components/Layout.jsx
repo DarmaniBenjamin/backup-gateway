@@ -11,14 +11,30 @@ import { usePolling } from "../usePolling.js";
 import Logo from "./Logo.jsx";
 import AlertBanner from "./AlertBanner.jsx";
 
+// Grouped by what you're doing: watching the fleet, getting data back, or defending it
 const NAV = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/devices", label: "Devices", icon: HardDrive },
-  { to: "/restore", label: "Restore", icon: History },
-  { to: "/quarantine", label: "Quarantine", icon: ShieldAlert, badge: "alerts" },
-  { to: "/jobs", label: "Jobs", icon: ListChecks },
-  { to: "/integrity", label: "Integrity", icon: ShieldCheck },
-  { to: "/audit", label: "Audit log", icon: ScrollText },
+  {
+    group: "Monitor",
+    items: [
+      { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
+      { to: "/devices", label: "Devices", icon: HardDrive },
+    ],
+  },
+  {
+    group: "Recover",
+    items: [
+      { to: "/restore", label: "Restore", icon: History },
+      { to: "/jobs", label: "Jobs", icon: ListChecks },
+    ],
+  },
+  {
+    group: "Defend",
+    items: [
+      { to: "/quarantine", label: "Quarantine", icon: ShieldAlert, badge: "alerts" },
+      { to: "/integrity", label: "Integrity", icon: ShieldCheck },
+      { to: "/audit", label: "Audit log", icon: ScrollText },
+    ],
+  },
 ];
 
 function NavItem({ item, onNavigate, count }) {
@@ -30,8 +46,10 @@ function NavItem({ item, onNavigate, count }) {
       onClick={onNavigate}
       className={({ isActive }) =>
         [
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors",
-          isActive ? "bg-raised text-fg" : "text-dim hover:bg-raised/60 hover:text-fg",
+          "relative flex h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors",
+          isActive
+            ? "bg-raised text-fg before:absolute before:inset-y-2 before:-left-4 before:w-0.5 before:rounded-full before:bg-signal"
+            : "text-dim hover:bg-raised/60 hover:text-fg",
         ].join(" ")
       }
     >
@@ -60,9 +78,16 @@ export default function Layout() {
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
   const nav = (
-    <nav className="flex flex-col gap-1" aria-label="Main">
-      {NAV.map((item) => (
-        <NavItem key={item.to} item={item} count={item.badge ? openAlerts : 0} onNavigate={() => setMenuOpen(false)} />
+    <nav className="flex flex-col gap-5" aria-label="Main">
+      {NAV.map(({ group, items }) => (
+        <div key={group}>
+          <p className="mb-1.5 px-3 font-display text-xs text-dim/80">{group}</p>
+          <div className="flex flex-col gap-1">
+            {items.map((item) => (
+              <NavItem key={item.to} item={item} count={item.badge ? openAlerts : 0} onNavigate={() => setMenuOpen(false)} />
+            ))}
+          </div>
+        </div>
       ))}
     </nav>
   );
@@ -91,7 +116,7 @@ export default function Layout() {
         <div>
           <div className="mb-8 flex items-center gap-3 px-2 pt-1">
             <Logo />
-            <span className="font-semibold tracking-tight">Backup Gateway</span>
+            <span className="font-display text-lg font-semibold">Backup Gateway</span>
           </div>
           {nav}
         </div>
@@ -103,7 +128,7 @@ export default function Layout() {
         <div className="flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-3">
             <Logo size={24} />
-            <span className="font-semibold tracking-tight">Backup Gateway</span>
+            <span className="font-display font-semibold">Backup Gateway</span>
           </div>
           <button
             type="button"

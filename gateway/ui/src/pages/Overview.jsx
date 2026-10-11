@@ -2,10 +2,12 @@
 // each device, storage use, the last integrity check and recent restore jobs.
 
 import { Link } from "react-router";
+import { LockKeyhole } from "lucide-react";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
 import StatusBadge from "../components/StatusBadge.jsx";
 import LoadState from "../components/LoadState.jsx";
+import ProtectionRing from "../components/ProtectionRing.jsx";
 
 function Headline({ data }) {
   const { total, online, frozen } = data.devices;
@@ -21,9 +23,12 @@ function Headline({ data }) {
     tone = "text-alert";
     text = `${frozen} ${plural(frozen, "device is", "devices are")} frozen.`;
   } else if (data.quarantined > 0) {
-    tone = "text-series-quarantine";
+    tone = "text-warn";
     text = `${data.quarantined} ${plural(data.quarantined, "file is", "files are")} waiting for review.`;
-  } else if (offline === 0) text = total === 1 ? "Your device is online." : `All ${total} devices are online.`;
+  } else if (offline === 0) {
+    tone = "text-good";
+    text = total === 1 ? "Your device is protected." : `All ${total} devices are protected.`;
+  }
   else {
     tone = "text-alert";
     text = offline === 1 ? `1 of ${total} devices is offline.` : `${offline} of ${total} devices are offline.`;
@@ -31,37 +36,40 @@ function Headline({ data }) {
 
   const link = "text-signal underline-offset-2 hover:underline";
   return (
-    <div className="mb-10">
-      <h1 className={`text-3xl font-semibold tracking-tight sm:text-4xl ${tone}`}>{text}</h1>
-      <p className="mt-3 text-dim">
-        {total === 0 ? (
-          <>
-            Add your first device from the <Link to="/devices" className={link}>Devices</Link> page.
-          </>
-        ) : frozen > 0 || data.quarantined > 0 ? (
-          <>
-            {frozen > 0
-              ? "Suspicious changes were caught and held back. Your good versions are safe and can be restored. "
-              : "The quarantine engine held back suspicious changes. "}
-            <Link to="/quarantine" className={link}>Review the quarantine</Link>
-            {offline > 0 && `. ${offline} of ${total} devices ${plural(offline, "is", "are")} offline`}.
-          </>
-        ) : (
-          <>
-            Last backup {timeAgo(lastBackup)}.{" "}
-            {data.pendingChanges > 0
-              ? `${data.pendingChanges} change${data.pendingChanges === 1 ? " is" : "s are"} waiting to be sent.`
-              : "Nothing is waiting to be sent."}
-          </>
-        )}
-      </p>
+    <div className="mb-10 flex flex-col items-start gap-6 sm:flex-row sm:items-center sm:gap-10">
+      <ProtectionRing devices={data.deviceList} />
+      <div className="min-w-0">
+        <h1 className={`text-3xl font-semibold sm:text-4xl ${tone}`}>{text}</h1>
+        <p className="mt-3 max-w-xl text-dim">
+          {total === 0 ? (
+            <>
+              Add your first device from the <Link to="/devices" className={link}>Devices</Link> page.
+            </>
+          ) : frozen > 0 || data.quarantined > 0 ? (
+            <>
+              {frozen > 0
+                ? "Suspicious changes were caught and held back. Your good versions are safe and can be restored. "
+                : "The quarantine engine held back suspicious changes. "}
+              <Link to="/quarantine" className={link}>Review the quarantine</Link>
+              {offline > 0 && `. ${offline} of ${total} devices ${plural(offline, "is", "are")} offline`}.
+            </>
+          ) : (
+            <>
+              Last backup {timeAgo(lastBackup)}.{" "}
+              {data.pendingChanges > 0
+                ? `${data.pendingChanges} change${data.pendingChanges === 1 ? " is" : "s are"} waiting to be sent.`
+                : "Nothing is waiting to be sent."}
+            </>
+          )}
+        </p>
+      </div>
     </div>
   );
 }
 
 function Section({ title, link, children }) {
   return (
-    <section className="rounded-lg border border-edge bg-surface">
+    <section className="panel-cut rounded-lg border border-edge bg-surface">
       <div className="flex items-center justify-between border-b border-edge px-5 py-3">
         <h2 className="text-sm font-medium">{title}</h2>
         {link}
@@ -85,6 +93,10 @@ function Storage({ storage, files, versions }) {
       </div>
       <p className="mt-2 text-sm text-dim">
         {saved > 0.005 ? `${Math.round(saved * 100)}% saved by compression and deduplication.` : "Nothing compressible yet."}
+      </p>
+      <p className="mt-2 flex items-center gap-2 text-sm text-secure">
+        <LockKeyhole size={14} aria-hidden="true" />
+        Encrypted on the device with AES-256-GCM
       </p>
       <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-edge pt-4 text-sm">
         <div>

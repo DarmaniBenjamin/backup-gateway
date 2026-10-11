@@ -1,26 +1,36 @@
 /* Fonts are bundled with the app (no outside requests — the gateway's security policy blocks them) */
+@import "@fontsource/chakra-petch/500.css";
+@import "@fontsource/chakra-petch/600.css";
 @import "@fontsource/ibm-plex-sans/400.css";
 @import "@fontsource/ibm-plex-sans/500.css";
 @import "@fontsource/ibm-plex-sans/600.css";
 @import "@fontsource/ibm-plex-mono/400.css";
 @import "tailwindcss";
 
-/* Design tokens: night-blue surfaces, amber for actions (like a drive activity light),
-   teal = healthy, coral = needs attention. Colour always means something. */
+/* Design tokens: a secure-operations console. Every colour has exactly one job:
+     good   (green)  = protected, healthy, verified
+     alert  (red)    = threat, attack, failure, offline
+     warn   (amber)  = held back or waiting: quarantine, paused, needs a look
+     secure (cyan)   = encryption and integrity details: keys, hashes, verified chunks
+     signal (violet) = your actions: buttons, links, focus, the restore point you pick
+   Everything else stays in quiet blue-greys so those colours always mean something. */
 @theme {
-  --color-night: #0e1726;     /* page background */
-  --color-surface: #152036;   /* sidebar, panels */
-  --color-raised: #1c2a45;    /* inputs, hover */
-  --color-edge: #263654;      /* borders */
-  --color-fg: #e4eaf4;        /* main text */
-  --color-dim: #8b9ab6;       /* secondary text */
-  --color-signal: #f2a93b;    /* primary actions, focus */
-  --color-signal-ink: #2a1a02;/* text on amber */
-  --color-good: #3cc6b4;
-  --color-alert: #f0616d;
+  --color-night: #090e1c;     /* page background */
+  --color-surface: #0e1629;   /* sidebar, panels */
+  --color-raised: #152038;    /* inputs, hover */
+  --color-edge: #213052;      /* borders */
+  --color-fg: #e2e9fb;        /* main text */
+  --color-dim: #8a98bb;       /* secondary text */
+  --color-signal: #9d8cff;    /* actions, focus */
+  --color-signal-ink: #140d3a;/* text on violet */
+  --color-good: #3ee0a5;
+  --color-alert: #ff5f7c;
+  --color-warn: #ffb547;
+  --color-secure: #4dd6ee;
 
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Chakra Petch", "IBM Plex Sans", system-ui, sans-serif;
 }
 
 @layer base {
@@ -29,6 +39,15 @@
   }
   body {
     @apply bg-night text-fg font-sans antialiased;
+    /* Faint dot matrix behind everything, like a circuit board under glass */
+    background-image: radial-gradient(color-mix(in srgb, var(--color-edge) 55%, transparent) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-attachment: fixed;
+  }
+  h1,
+  h2 {
+    font-family: var(--font-display);
+    letter-spacing: 0.01em;
   }
   button,
   [role="button"] {
@@ -44,15 +63,35 @@
     *::after {
       transition-duration: 0.01ms !important;
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
     }
   }
 }
 
-/* Chart colours — validated together for colour-blind separation and contrast on the dark surface.
-   The bright amber (signal) is never used for data: it only marks the restore point you pick.
-   Quarantine uses a darker mustard that reads as "held for review" and stays distinct from it. */
+/* A panel with one cut corner, like a machined plate. Used for the main surfaces. */
+@utility panel-cut {
+  --cut: 14px;
+  position: relative;
+  clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, 0 100%);
+  /* The border along the cut edge (half of this 2px line is clipped away, leaving 1px) */
+  &::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    right: calc(var(--cut) - var(--cut) * 1.4142);
+    width: calc(var(--cut) * 1.4142);
+    height: 2px;
+    background: var(--color-edge);
+    transform-origin: top left;
+    transform: rotate(45deg);
+    pointer-events: none;
+  }
+}
+
+/* Chart colours — validated together for colour-blind separation and contrast on the panels.
+   Violet (signal) is never used for data: it only marks the restore point you pick. */
 @theme {
-  --color-series-change: #3987e5;     /* files added or changed */
-  --color-series-delete: #d55181;     /* files deleted */
+  --color-series-change: #4f95f0;     /* files added or changed */
+  --color-series-delete: #d55fb3;     /* files deleted */
   --color-series-quarantine: #c98500; /* held back by the quarantine engine */
 }
