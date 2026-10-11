@@ -54,7 +54,7 @@ export default function Audit() {
   }, [data, filter]);
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       <PageHeader title="Audit log">Every login, restore, enrollment code and integrity check, newest first.</PageHeader>
 
       <div className="mb-4 flex rounded-md border border-edge p-0.5 sm:inline-flex" role="group" aria-label="Show">

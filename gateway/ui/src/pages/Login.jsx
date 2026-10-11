@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { useAuth } from "../auth-context.js";
 import Logo from "../components/Logo.jsx";
 
@@ -40,15 +40,13 @@ export default function Login() {
   return (
     <div className="flex min-h-dvh items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm">
-        <div className="mb-8 flex items-center gap-3">
-          <Logo size={36} />
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Backup Gateway</h1>
-            <p className="text-sm text-dim">Sign in to manage client backups</p>
-          </div>
+        <div className="mb-8 flex flex-col items-center text-center">
+          <Logo size={64} />
+          <h1 className="mt-4 text-2xl font-semibold">Backup Gateway</h1>
+          <p className="mt-1 text-sm text-dim">Sign in to manage client backups</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-edge bg-surface p-6" noValidate>
+        <form onSubmit={handleSubmit} className="glass space-y-4 rounded-lg border border-edge p-6 shadow-2xl" noValidate>
           <div>
             <label htmlFor="username" className="mb-1.5 block text-sm text-dim">
               Username
@@ -94,7 +92,11 @@ export default function Login() {
           </button>
         </form>
 
-        <p className="mt-6 text-xs leading-relaxed text-dim">
+        <p className="mt-6 flex items-start gap-2 text-xs leading-relaxed text-secure">
+          <ShieldCheck size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+          Admin access only. Every sign-in, successful or not, is recorded in the audit log.
+        </p>
+        <p className="mt-3 text-xs leading-relaxed text-dim">
           Forgot your password? On the gateway, run <code className="font-mono text-fg">npm run create-admin -- yourname</code> to set a new one.
         </p>
       </div>

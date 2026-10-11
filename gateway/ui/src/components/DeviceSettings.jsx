@@ -72,7 +72,7 @@ function LiveStatus({ status, live }) {
   let tone = "text-good";
   if (status.paused) {
     text = `Paused: ${status.paused}`;
-    tone = "text-signal";
+    tone = "text-warn";
   } else if (status.limitMbps) {
     text = `Uploading at up to ${status.limitMbps} Mbps (${status.workHours ? "work hours" : "outside work hours"})`;
   } else {
@@ -88,7 +88,7 @@ function LiveStatus({ status, live }) {
         {status.metered === true && " · metered connection"}
       </p>
       {status.watchLimitHit && (
-        <p className="text-signal">
+        <p className="text-warn">
           This device couldn&rsquo;t watch all its files live, so it switched to a full scan every 15 minutes. Choose a
           scheduled scan below, or raise the system&rsquo;s watch limit.
         </p>

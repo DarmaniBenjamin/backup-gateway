@@ -31,7 +31,7 @@ function DeviceRow({ d }) {
           <Link to={`/devices/${d.id}`} className="block truncate font-medium hover:text-signal" title="Backup folders">
             {d.name}
           </Link>
-          <p className="truncate font-mono text-xs text-dim" title="Device ID">
+          <p className="truncate font-mono text-xs text-secure/70" title="Device ID">
             {d.id}
           </p>
         </div>
@@ -46,7 +46,7 @@ function DeviceRow({ d }) {
             seen {timeAgo(d.lastSeenAt)}
           </p>
           {d.pausedReason && d.status === "online" && (
-            <p className="mt-0.5 text-xs text-signal" title={`Backups paused: ${d.pausedReason}`}>
+            <p className="mt-0.5 text-xs text-warn" title={`Backups paused: ${d.pausedReason}`}>
               Paused
             </p>
           )}
@@ -56,7 +56,7 @@ function DeviceRow({ d }) {
         </Field>
         <Field label="Files">
           {(d.filesTracked ?? 0).toLocaleString()}
-          {d.pendingChanges > 0 && <span className="ml-2 text-signal">{d.pendingChanges} waiting</span>}
+          {d.pendingChanges > 0 && <span className="ml-2 text-warn">{d.pendingChanges} waiting</span>}
         </Field>
         <Field label="Versions">{d.versions.toLocaleString()}</Field>
         <Field label="Stored" title={`${formatSize(d.originalBytes)} of unique data`}>
@@ -72,7 +72,7 @@ function DeviceRow({ d }) {
         </p>
       )}
       {!d.encryptionReady && (
-        <p className="text-sm text-signal md:col-span-6">
+        <p className="text-sm text-warn md:col-span-6">
           Waiting for this device to finish setting up encryption. Start its agent.
         </p>
       )}
@@ -101,7 +101,7 @@ export default function Devices() {
   );
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       <PageHeader title="Devices" action={addButton}>
         {data && `${data.length} device${data.length === 1 ? "" : "s"} across ${groups.length} client${groups.length === 1 ? "" : "s"}.`}
       </PageHeader>

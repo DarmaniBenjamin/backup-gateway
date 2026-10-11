@@ -1,25 +1,40 @@
 /* Fonts are bundled with the app (no outside requests — the gateway's security policy blocks them) */
-@import "@fontsource/ibm-plex-sans/400.css";
-@import "@fontsource/ibm-plex-sans/500.css";
-@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/sora/400.css";
+@import "@fontsource/sora/600.css";
+@import "@fontsource/sora/700.css";
+@import "@fontsource/manrope/400.css";
+@import "@fontsource/manrope/500.css";
+@import "@fontsource/manrope/600.css";
 @import "@fontsource/ibm-plex-mono/400.css";
 @import "tailwindcss";
 
-/* Design tokens: night-blue surfaces, amber for actions (like a drive activity light),
-   teal = healthy, coral = needs attention. Colour always means something. */
+/* Design tokens: a dark security console with an aurora glow. Every colour has exactly one job:
+     good   (green)  = protected, healthy, verified
+     alert  (red)    = threat, attack, failure, offline
+     warn   (amber)  = held back or waiting: quarantine, paused, needs a look
+     secure (cyan)   = encryption and integrity details: keys, hashes, verified chunks
+     signal (violet) = your actions: buttons, links, focus, the restore point you pick
+   Panels are frosted glass over the background, so the glow shows through softly. */
 @theme {
-  --color-night: #0e1726;     /* page background */
-  --color-surface: #152036;   /* sidebar, panels */
-  --color-raised: #1c2a45;    /* inputs, hover */
-  --color-edge: #263654;      /* borders */
-  --color-fg: #e4eaf4;        /* main text */
-  --color-dim: #8b9ab6;       /* secondary text */
-  --color-signal: #f2a93b;    /* primary actions, focus */
-  --color-signal-ink: #2a1a02;/* text on amber */
-  --color-good: #3cc6b4;
-  --color-alert: #f0616d;
+  --color-night: #0b0a1a;                   /* page background */
+  --color-surface: rgb(255 255 255 / 0.045); /* glass panels */
+  --color-raised: rgb(255 255 255 / 0.07);   /* inputs, hover, selected */
+  --color-edge: rgb(255 255 255 / 0.09);     /* borders */
+  --color-solid: #15142b;                    /* opaque panels: dialogs, menus, tooltips */
+  --color-fg: #eeeef8;                       /* main text */
+  --color-dim: #9c9abb;                      /* secondary text */
+  --color-signal: #8b7cff;                   /* actions, focus */
+  --color-signal-ink: #120c38;               /* text on violet */
+  --color-good: #3ddc97;
+  --color-alert: #ff6b81;
+  --color-warn: #ffb84d;
+  --color-secure: #4fd1ff;
 
-  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+
+  --font-sans: "Manrope", system-ui, sans-serif;
+  --font-display: "Sora", "Manrope", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
@@ -29,6 +44,16 @@
   }
   body {
     @apply bg-night text-fg font-sans antialiased;
+    /* The aurora: a violet glow top right, a teal glow bottom left */
+    background-image:
+      radial-gradient(900px 520px at 88% -8%, rgb(98 76 255 / 0.28), transparent 70%),
+      radial-gradient(760px 520px at 4% 108%, rgb(15 181 200 / 0.18), transparent 70%);
+    background-attachment: fixed;
+  }
+  h1,
+  h2 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
   }
   button,
   [role="button"] {
@@ -44,15 +69,21 @@
     *::after {
       transition-duration: 0.01ms !important;
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
     }
   }
 }
 
-/* Chart colours — validated together for colour-blind separation and contrast on the dark surface.
-   The bright amber (signal) is never used for data: it only marks the restore point you pick.
-   Quarantine uses a darker mustard that reads as "held for review" and stays distinct from it. */
+/* Frosted glass behind every translucent panel */
+@utility glass {
+  background-color: var(--color-surface);
+  backdrop-filter: blur(18px) saturate(140%);
+}
+
+/* Chart colours — validated together for colour-blind separation and contrast on the glass panels.
+   Violet (signal) is never used for data: it only marks the restore point you pick. */
 @theme {
-  --color-series-change: #3987e5;     /* files added or changed */
-  --color-series-delete: #d55181;     /* files deleted */
+  --color-series-change: #5b8cff;     /* files added or changed */
+  --color-series-delete: #d55fb3;     /* files deleted */
   --color-series-quarantine: #c98500; /* held back by the quarantine engine */
 }

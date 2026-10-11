@@ -1,52 +1,71 @@
-// App frame: sidebar navigation on the left (a drop-down menu on phones) and the page on the right.
-// Alerts are checked here for every page: they appear as a banner above the page and as a count
-// next to "Quarantine" in the menu. Pages get the alerts (and a refresh function) through the
-// router's outlet context.
+// App frame: a glass top bar with the pages as tabs (a drop-down menu on smaller screens),
+// an alert pill and your account on the right, and the page below.
+// Alerts are checked here for every page: they appear as a banner above the page and as the
+// pill in the top bar. Pages get the alerts (and a refresh function) through the outlet context.
 
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
-import { HardDrive, History, LayoutDashboard, ListChecks, LogOut, Menu, ScrollText, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { ChevronDown, LogOut, Menu, ShieldAlert, X } from "lucide-react";
 import { useAuth } from "../auth-context.js";
 import { usePolling } from "../usePolling.js";
 import Logo from "./Logo.jsx";
 import AlertBanner from "./AlertBanner.jsx";
 
 const NAV = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/devices", label: "Devices", icon: HardDrive },
-  { to: "/restore", label: "Restore", icon: History },
-  { to: "/quarantine", label: "Quarantine", icon: ShieldAlert, badge: "alerts" },
-  { to: "/jobs", label: "Jobs", icon: ListChecks },
-  { to: "/integrity", label: "Integrity", icon: ShieldCheck },
-  { to: "/audit", label: "Audit log", icon: ScrollText },
+  { to: "/", label: "Overview", end: true },
+  { to: "/devices", label: "Devices" },
+  { to: "/restore", label: "Restore" },
+  { to: "/quarantine", label: "Quarantine" },
+  { to: "/jobs", label: "Jobs" },
+  { to: "/integrity", label: "Integrity" },
+  { to: "/audit", label: "Audit log" },
 ];
 
-function NavItem({ item, onNavigate, count }) {
-  const Icon = item.icon;
+function AccountMenu({ user, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
   return (
-    <NavLink
-      to={item.to}
-      end={item.end}
-      onClick={onNavigate}
-      className={({ isActive }) =>
-        [
-          "flex h-10 items-center gap-3 rounded-md px-3 text-sm transition-colors",
-          isActive ? "bg-raised text-fg" : "text-dim hover:bg-raised/60 hover:text-fg",
-        ].join(" ")
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <Icon size={18} className={isActive ? "text-signal" : ""} aria-hidden="true" />
-          {item.label}
-          {count > 0 && (
-            <span className="ml-auto rounded-full bg-alert px-2 py-0.5 text-xs font-medium text-night" aria-label={`${count} open alert${count === 1 ? "" : "s"}`}>
-              {count}
-            </span>
-          )}
-        </>
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="flex h-9 items-center gap-2 rounded-full border border-edge bg-raised pl-1 pr-2.5 text-sm hover:border-signal/50"
+      >
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-signal/20 font-display text-xs font-semibold text-signal">
+          {user?.username?.[0]?.toUpperCase()}
+        </span>
+        <span className="hidden sm:inline">{user?.username}</span>
+        <ChevronDown size={14} className="text-dim" aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-11 z-40 w-48 rounded-lg border border-edge bg-solid p-1.5 shadow-2xl">
+          <p className="px-3 py-2 text-xs text-dim">Signed in as {user?.username}</p>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={onLogout}
+            className="flex h-9 w-full items-center gap-2 rounded-md px-3 text-sm text-fg hover:bg-raised"
+          >
+            <LogOut size={15} aria-hidden="true" />
+            Log out
+          </button>
+        </div>
       )}
-    </NavLink>
+    </div>
   );
 }
 
@@ -59,77 +78,74 @@ export default function Layout() {
 
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
-  const nav = (
-    <nav className="flex flex-col gap-1" aria-label="Main">
-      {NAV.map((item) => (
-        <NavItem key={item.to} item={item} count={item.badge ? openAlerts : 0} onNavigate={() => setMenuOpen(false)} />
-      ))}
-    </nav>
-  );
-
-  const account = (
-    <div className="flex items-center justify-between gap-2 border-t border-edge pt-4">
-      <div className="min-w-0">
-        <p className="truncate text-sm text-fg">{user?.username}</p>
-        <p className="text-xs text-dim">Administrator</p>
-      </div>
-      <button
-        type="button"
-        onClick={logout}
-        className="flex h-9 items-center gap-2 rounded-md px-3 text-sm text-dim hover:bg-raised hover:text-fg"
-      >
-        <LogOut size={16} aria-hidden="true" />
-        Log out
-      </button>
-    </div>
-  );
+  const tabClass = ({ isActive }) =>
+    [
+      "relative flex h-full items-center px-3.5 text-sm transition-colors",
+      isActive
+        ? "text-fg after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-signal"
+        : "text-dim hover:text-fg",
+    ].join(" ");
 
   return (
-    <div className="min-h-dvh lg:flex">
-      {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col justify-between border-r border-edge bg-surface p-4 lg:flex lg:sticky lg:top-0 lg:h-dvh">
-        <div>
-          <div className="mb-8 flex items-center gap-3 px-2 pt-1">
-            <Logo />
-            <span className="font-semibold tracking-tight">Backup Gateway</span>
-          </div>
-          {nav}
-        </div>
-        {account}
-      </aside>
+    <div className="min-h-dvh">
+      <header className="glass sticky top-0 z-30 border-b border-edge">
+        <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 sm:px-6">
+          <Link to="/" className="flex shrink-0 items-center gap-2.5">
+            <Logo size={30} />
+            <span className="font-display text-[17px] font-semibold">Backup Gateway</span>
+          </Link>
 
-      {/* Phone / tablet top bar */}
-      <header className="sticky top-0 z-20 border-b border-edge bg-surface lg:hidden">
-        <div className="flex h-14 items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <Logo size={24} />
-            <span className="font-semibold tracking-tight">Backup Gateway</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setMenuOpen((o) => !o)}
-            aria-expanded={menuOpen}
-            aria-label={menuOpen ? "Close menu" : "Open menu"}
-            className="relative flex h-10 w-10 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg"
-          >
-            {menuOpen ? <X size={20} /> : <Menu size={20} />}
-            {!menuOpen && openAlerts > 0 && (
-              <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-alert ring-2 ring-surface" aria-hidden="true" />
+          <nav className="hidden h-full items-stretch lg:flex" aria-label="Main">
+            {NAV.map((item) => (
+              <NavLink key={item.to} to={item.to} end={item.end} className={tabClass}>
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-3">
+            {openAlerts > 0 && (
+              <Link
+                to="/quarantine"
+                className="flex h-8 items-center gap-1.5 rounded-full border border-alert/40 bg-alert/15 px-3 text-xs font-medium text-alert hover:bg-alert/25"
+              >
+                <ShieldAlert size={14} aria-hidden="true" />
+                {openAlerts} alert{openAlerts === 1 ? "" : "s"}
+              </Link>
             )}
-          </button>
-        </div>
-        {menuOpen && (
-          <div className="space-y-4 border-t border-edge px-4 pb-4 pt-3">
-            {nav}
-            {account}
+            <AccountMenu user={user} onLogout={logout} />
+            <button
+              type="button"
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-expanded={menuOpen}
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              className="flex h-9 w-9 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg lg:hidden"
+            >
+              {menuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
           </div>
+        </div>
+
+        {menuOpen && (
+          <nav className="border-t border-edge px-4 pb-4 pt-2 lg:hidden" aria-label="Main">
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  `flex h-11 items-center rounded-md px-3 text-sm ${isActive ? "bg-raised text-fg" : "text-dim hover:text-fg"}`
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
         )}
       </header>
 
-      <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 sm:py-8">
-        <div className="mx-auto max-w-6xl">
-          <AlertBanner alerts={alerts} onChange={reloadAlerts} />
-        </div>
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+        <AlertBanner alerts={alerts} onChange={reloadAlerts} />
         <Outlet context={{ alerts, reloadAlerts }} />
       </main>
     </div>

@@ -1,13 +1,23 @@
-// Product mark: three stacked drive bays with an amber activity light.
+// Product mark: a shield on an aurora-coloured tile (violet, cyan, green: actions, encryption, protected).
 
 export default function Logo({ size = 28 }) {
+  const id = `logo-${size}`;
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="var(--color-raised)" />
-      <rect x="7" y="8" width="18" height="4" rx="1.5" fill="var(--color-dim)" />
-      <rect x="7" y="14" width="18" height="4" rx="1.5" fill="var(--color-dim)" />
-      <rect x="7" y="20" width="18" height="4" rx="1.5" fill="var(--color-dim)" />
-      <circle cx="21.5" cy="22" r="1.4" fill="var(--color-signal)" />
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#8b7cff" />
+          <stop offset="0.55" stopColor="#4fd1ff" />
+          <stop offset="1" stopColor="#3ddc97" />
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="9" fill={`url(#${id})`} />
+      <path
+        d="M16 7.2 22.6 9.6v4.9c0 4-2.8 7.3-6.6 8.9-3.8-1.6-6.6-4.9-6.6-8.9V9.6L16 7.2Z"
+        fill="#0b0a1a"
+        fillOpacity="0.82"
+      />
+      <path d="m13.3 15.3 1.9 1.9 3.6-3.8" fill="none" stroke="#eeeef8" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

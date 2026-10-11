@@ -310,7 +310,7 @@ export default function Quarantine() {
 
   if (!held.data || !devices.data) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <PageHeader title="Quarantine" />
         <LoadState
           loading={held.loading || devices.loading}
@@ -324,7 +324,7 @@ export default function Quarantine() {
   const count = held.data.length;
 
   return (
-    <div className="mx-auto max-w-6xl pb-24">
+    <div className="w-full pb-24">
       <PageHeader title="Quarantine">
         {count === 0
           ? "Nothing is waiting for review."
@@ -359,8 +359,8 @@ export default function Quarantine() {
 
       {/* Action bar: appears while something is selected */}
       {selected.size > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-edge bg-surface/95 backdrop-blur lg:left-64">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8">
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-edge bg-solid/95 backdrop-blur">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <p className="text-sm">
               {selected.size} selected{" "}
               <button type="button" className="ml-2 text-dim underline-offset-2 hover:text-fg hover:underline" onClick={() => setSelected(new Set())}>

@@ -120,7 +120,7 @@ export default function ActivityChart({ buckets, bucketMinutes, selectedAt, onSe
           </svg>
           {hovered && (
             <div
-              className="pointer-events-none absolute top-0 z-10 w-56 rounded-md border border-edge bg-raised px-3 py-2 text-xs shadow-xl"
+              className="pointer-events-none absolute top-0 z-10 w-56 rounded-md border border-edge bg-solid px-3 py-2 text-xs shadow-xl"
               style={{
                 left: `${((hover + 0.5) / buckets.length) * 100}%`,
                 transform: hover > buckets.length * 0.6 ? "translateX(calc(-100% - 8px))" : "translateX(8px)",

@@ -71,7 +71,7 @@ export default function Restore() {
   if (!devices) return <LoadState loading={devicesLoading} error={devicesError} />;
   if (devices.length === 0) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <PageHeader title="Restore">No devices are enrolled yet, so there is nothing to restore.</PageHeader>
       </div>
     );
@@ -80,7 +80,7 @@ export default function Restore() {
   const restoreFolderLabel = path ? "Restore this folder" : "Restore all files";
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       <PageHeader title="Restore">Bring back a file, a folder or a whole device, from any point in time.</PageHeader>
 
       <div className="mb-8 max-w-sm">
