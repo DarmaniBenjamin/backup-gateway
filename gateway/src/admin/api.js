@@ -49,7 +49,10 @@ import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
 } from "../folders.js";
 import { SettingsError, cleanSettings, settingsOf } from "../device-settings.js";
-import { CloudError, cleanCloudSettings, testCloud } from "../cloud/offsite.js";
+import { CloudError, cleanCloudSettings, testCloud, PROVIDERS } from "../cloud/offsite.js";
+import { CopyError } from "../cloud/copies.js";
+import { startSignIn, finishSignIn, explainDrive } from "../cloud/gdrive.js";
+import { cleanDestinations } from "../cloud/routing.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
 
@@ -82,7 +85,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, offsite }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies }) {
   const listingCache = new Map(); // folder listings, see GET /devices/:id/files
   function publicDevice(d, stats, storageRows = db.storageStats()) {
     const s = stats?.find((x) => x.device_id === d.id);
@@ -449,6 +452,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       addedBy: f.added_by,
       removedAt: f.removed_at,
       removedBy: f.removed_by,
+      // Which off-site copies get this folder: null = all of them
+      destinations: f.destinations ? JSON.parse(f.destinations) : null,
     };
   }
 
@@ -495,6 +500,12 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         folders: db.listFolders(d.id).map(publicFolder),
         settings: settingsOf(d),
         agentStatus: agentStatusOf(d),
+        // This device's own off-site copies, and whether the failsafe (everything) is set up
+        offsite: {
+          copies: copies.forDevice(d.id),
+          failsafe: !!copies.failsafe(),
+          google: { clientId: copies.googleClient()?.clientId ?? null },
+        },
       };
     },
 
@@ -632,6 +643,23 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       return publicFolder(db.getFolder(f.id));
     },
 
+    // Which off-site copies this folder goes to (Backblaze/S3, Google Drive, or both)
+    "POST /devices/:id/folders/:folderId/destinations"({ params, body, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      const f = db.getFolder(params.folderId);
+      if (!f || f.device_id !== d.id) throw new ApiError(404, "Folder not found");
+      let destinations;
+      try {
+        destinations = cleanDestinations(body.destinations, copies.forDevice(d.id).map((c) => c.id));
+      } catch (err) {
+        throw new ApiError(400, err.message);
+      }
+      db.setFolderDestinations(f.id, destinations);
+      store.audit(admin.username, "folder.destinations-changed", { device: d.device_name, name: f.name, destinations: destinations ?? "all" }, ip);
+      for (const c of copies.forDevice(d.id)) copies.syncNow(c.id); // look at this folder's backups again
+      return publicFolder(db.getFolder(f.id));
+    },
+
     // Stops backing the folder up. Its backups are KEPT: still browsable and restorable,
     // and it can be added back later with its history intact.
     "POST /devices/:id/folders/:folderId/remove"({ params, admin, ip }) {
@@ -705,7 +733,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     return { kind: "hex", text: lines.join("\n"), truncated: size > hexBytes.length };
   }
 
-  // ---------- Off-site copy ----------
+  // ---------- Off-site copies ----------
+  // The failsafe (everything, one place) and each device's own copies (see cloud/copies.js).
 
   function cloudSettings(body) {
     try {
@@ -723,15 +752,43 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       throw err;
     }
   }
-  const requireCloud = () => {
-    const c = offsite.config();
-    if (!c) throw new ApiError(409, "Off-site backups aren't connected.");
+  function copyOr404(id) {
+    const c = copies.get(id);
+    if (!c) throw new ApiError(404, "That off-site copy isn't connected.");
     return c;
-  };
+  }
+  // deviceId in a request: a device's own copy; none: the failsafe
+  function scopeOf(body) {
+    if (!body.deviceId) return null;
+    return getDeviceOr404(String(body.deviceId)).id;
+  }
+  const where = (c) => (c.deviceName ? `${c.client} / ${c.deviceName}` : "failsafe");
+
+  // Signing in to Google happens in the browser: POST /cloud/drive/start gives the Google address,
+  // and Google sends the person back to /admin/oauth/google on this gateway (oauthCallback below).
+  const signIns = new Map(); // state -> { verifier, clientId, clientSecret, redirectUri, admin, deviceId, resign, back, expires }
+  // Google sends the browser back to this gateway's own loopback address (a "desktop app"
+  // sign-in): the address the browser is using now if it's a loopback one
+  function redirectUriFor(host) {
+    const h = String(host ?? "");
+    const loopback = /^(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(h) ? h.replace(/^localhost/, "127.0.0.1") : `127.0.0.1:${config.adminPort}`;
+    return `http://${loopback}/admin/oauth/google`;
+  }
+  let newRecoveryKey = null; // after a Google sign-in made the first copy: shown once on the Off-site page
 
   Object.assign(routes, {
-    "GET /cloud"() {
-      return offsite.status();
+    "GET /cloud"({ host }) {
+      const key = newRecoveryKey;
+      newRecoveryKey = null;
+      const google = copies.googleClient();
+      return {
+        recoveryFingerprint: copies.recovery()?.fingerprint ?? null,
+        failsafe: copies.failsafe(),
+        copies: copies.list().filter((c) => !c.failsafe),
+        providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, { label: v.label }])),
+        google: { redirectUri: redirectUriFor(host), clientId: google?.clientId ?? null },
+        ...(key ? { newRecoveryKey: key } : {}),
+      };
     },
 
     async "POST /cloud/test"({ body }) {
@@ -739,57 +796,121 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       return { ok: true };
     },
 
+    // A Backblaze/S3 bucket: the failsafe, or (with deviceId) one device's own
     async "POST /cloud/connect"({ body, admin, ip }) {
+      const deviceId = scopeOf(body);
       const settings = cloudSettings(body.settings);
       await cloudTest(settings);
       let result;
       try {
-        result = offsite.connect(settings, admin.username);
+        result = copies.addS3(settings, deviceId, admin.username);
       } catch (err) {
-        if (err instanceof CloudError) throw new ApiError(409, err.message);
+        if (err instanceof CopyError) throw new ApiError(409, err.message);
         throw err;
       }
+      const c = copies.get(result.id);
       store.audit(admin.username, "cloud.connected", {
-        provider: settings.provider, endpoint: settings.endpoint, bucket: settings.bucket, lockMode: settings.lockMode,
-        retentionDays: settings.retentionDays, recoveryKey: result.fingerprint,
+        for: where(c), provider: settings.provider, endpoint: settings.endpoint, bucket: settings.bucket,
+        lockMode: settings.lockMode, retentionDays: settings.retentionDays, recoveryKey: result.fingerprint,
       }, ip);
       return result;
     },
 
-    async "POST /cloud/key"({ body, admin, ip }) {
-      const c = requireCloud();
-      const settings = cloudSettings({
-        provider: c.provider, endpoint: c.endpoint, region: c.region, bucket: c.bucket, lockMode: c.lock_mode,
-        retentionDays: c.retention_days, keyId: body.keyId, secret: body.secret,
+    // Google Drive: returns the Google address to send the browser to
+    "POST /cloud/drive/start"({ body, admin, host }) {
+      const deviceId = scopeOf(body);
+      const resign = body.resign ? copyOr404(String(body.resign)) : null;
+      if (resign && resign.kind !== "drive") throw new ApiError(400, "That copy isn't a Google Drive.");
+      const known = copies.googleClient();
+      const clientId = String(body.clientId ?? "").trim() || known?.clientId || "";
+      const clientSecret = String(body.clientSecret ?? "").trim() || (clientId === known?.clientId ? known.clientSecret : "");
+      if (!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(clientId)) throw new ApiError(400, "Enter the client ID. It ends with .apps.googleusercontent.com");
+      if (!clientSecret || clientSecret.length > 200 || /\s/.test(clientSecret)) throw new ApiError(400, "Enter the client secret.");
+      if (!deviceId && !resign && copies.failsafe()) throw new ApiError(409, "There's already a failsafe copy. Disconnect it first to switch.");
+      const redirectUri = redirectUriFor(host);
+      const { url, state, verifier } = startSignIn({ clientId, redirectUri });
+      for (const [k, v] of signIns) if (v.expires < Date.now()) signIns.delete(k);
+      const owner = resign?.deviceId ?? deviceId;
+      signIns.set(state, {
+        verifier, clientId, clientSecret, redirectUri, admin: admin.username, deviceId, resign: resign?.id ?? null,
+        back: owner ? `/devices/${owner}` : "/offsite", expires: Date.now() + 10 * 60_000,
       });
+      return { url };
+    },
+
+    async "POST /cloud/:id/key"({ params, body, admin, ip }) {
+      const c = copyOr404(params.id);
+      if (c.kind !== "s3") throw new ApiError(400, "Only a bucket has an access key.");
+      const old = copies.raw(c.id).settings;
+      const settings = cloudSettings({ ...old, keyId: body.keyId, secret: body.secret });
       await cloudTest(settings);
-      offsite.replaceKey(settings.keyId, settings.secret);
-      store.audit(admin.username, "cloud.key-replaced", { keyId: settings.keyId }, ip);
-      return offsite.status();
+      copies.replaceS3Key(c.id, settings.keyId, settings.secret);
+      store.audit(admin.username, "cloud.key-replaced", { for: where(c), keyId: settings.keyId }, ip);
+      return copies.get(c.id);
     },
 
-    "POST /cloud/pause"({ body, admin, ip }) {
-      requireCloud();
-      offsite.setPaused(!!body.paused);
-      store.audit(admin.username, body.paused ? "cloud.paused" : "cloud.resumed", {}, ip);
-      return offsite.status();
+    "POST /cloud/:id/pause"({ params, body, admin, ip }) {
+      const c = copyOr404(params.id);
+      copies.setPaused(c.id, !!body.paused);
+      store.audit(admin.username, body.paused ? "cloud.paused" : "cloud.resumed", { for: where(c) }, ip);
+      return copies.get(c.id);
     },
 
-    "POST /cloud/sync"() {
-      requireCloud();
-      offsite.syncNow();
+    // "Check now"; on the failsafe it's "Back up everything now"
+    "POST /cloud/:id/sync"({ params, admin, ip }) {
+      const c = copyOr404(params.id);
+      if (c.paused) throw new ApiError(409, "This copy is paused. Resume it first.");
+      copies.syncNow(c.id);
+      if (c.failsafe) store.audit(admin.username, "cloud.failsafe-now", {}, ip);
       return { ok: true };
     },
 
-    "POST /cloud/disconnect"({ body, admin, ip }) {
-      const c = requireCloud();
-      if (String(body.bucket ?? "").trim() !== c.bucket) throw new ApiError(400, "Type the bucket name exactly to confirm.");
-      offsite.disconnect();
-      store.audit(admin.username, "cloud.disconnected", { bucket: c.bucket }, ip);
-      log.warn(`Admin "${admin.username}" disconnected off-site backups from ${c.bucket}`);
+    // Confirm with the bucket name or the Google account's email
+    "POST /cloud/:id/disconnect"({ params, body, admin, ip }) {
+      const c = copyOr404(params.id);
+      const name = c.kind === "s3" ? c.bucket : c.email;
+      if (String(body.confirm ?? "").trim().toLowerCase() !== String(name ?? "").toLowerCase()) {
+        throw new ApiError(400, `Type ${c.kind === "s3" ? "the bucket name" : "the Google account's email"} exactly to confirm.`);
+      }
+      copies.disconnect(c.id);
+      store.audit(admin.username, "cloud.disconnected", { for: where(c), target: name }, ip);
+      log.warn(`Admin "${admin.username}" disconnected the off-site copy ${where(c)} (${name})`);
       return { ok: true };
     },
   });
+
+  // Google sends the browser here after the person allowed (or refused) access. There's no
+  // session cookie on this request (it comes from google.com, and the cookie is SameSite=Strict);
+  // the one-time state proves it's a sign-in an admin started here in the last 10 minutes.
+  // Returns where to send the browser next.
+  async function oauthCallback(query, ip) {
+    const pending = signIns.get(String(query.state ?? ""));
+    if (!pending || pending.expires < Date.now()) return "/offsite?drive_error=" + encodeURIComponent("That sign-in expired or was already used. Start again.");
+    signIns.delete(String(query.state));
+    const back = (extra) => `${pending.back}?${extra}`;
+    if (query.error) {
+      return back("drive_error=" + encodeURIComponent(query.error === "access_denied" ? "Access to Google Drive wasn't allowed." : `Google said: ${query.error}`));
+    }
+    try {
+      const refreshToken = await finishSignIn({ ...pending, code: String(query.code ?? "") });
+      const sign = { clientId: pending.clientId, clientSecret: pending.clientSecret, refreshToken };
+      copies.rememberGoogleClient(pending.clientId, pending.clientSecret);
+      if (pending.resign) {
+        await copies.resignDrive(pending.resign, sign);
+        store.audit(pending.admin, "cloud.drive-signed-in-again", { copy: pending.resign }, ip);
+        return back("drive=signed-in");
+      }
+      const result = await copies.addDrive(sign, pending.deviceId, pending.admin);
+      const c = copies.get(result.id);
+      if (result.recoveryKey) newRecoveryKey = { recoveryKey: result.recoveryKey, fingerprint: result.fingerprint };
+      store.audit(pending.admin, "cloud.connected", { for: where(c), provider: "Google Drive", email: result.email, recoveryKey: result.fingerprint }, ip);
+      // The very first copy made the recovery key: show it on the Off-site page
+      return result.recoveryKey ? "/offsite?drive=connected" : back("drive=connected");
+    } catch (err) {
+      log.warn(`Google Drive sign-in failed: ${err.message}`);
+      return back("drive_error=" + encodeURIComponent(err instanceof CopyError ? err.message : explainDrive(err)));
+    }
+  }
 
   routes["GET /quarantine/:id/inspect"] = ({ params, admin, ip }) => {
     const v = db.getVersion(Number(params.id));
@@ -817,7 +938,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     if (!ids.length) throw new ApiError(400, "No items selected.");
     let changed = 0;
     for (const id of ids) if (db.reviewVersion(id, status, admin.username)) changed++;
-    if (status === "ok" && changed) offsite?.syncNow(); // released files go off-site now
+    if (status === "ok" && changed) copies.syncNow(); // released files go off-site now
     const action = status === "ok" ? "quarantine.released" : "quarantine.rejected";
     store.audit(admin.username, action, { count: changed }, ip);
     log.info(`Admin "${admin.username}" ${status === "ok" ? "released" : "rejected"} ${changed} quarantined version(s)`);
@@ -834,12 +955,14 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     return { method, re, names, handler, isLogin: pattern === "/login" };
   });
 
-  return function match(method, pathname) {
+  function match(method, pathname) {
     for (const r of compiled) {
       if (r.method !== method) continue;
       const m = pathname.match(r.re);
       if (m) return { handler: r.handler, isLogin: r.isLogin, params: Object.fromEntries(r.names.map((n, i) => [n, m[i + 1]])) };
     }
     return null;
-  };
+  }
+  match.oauthCallback = oauthCallback;
+  return match;
 }
