@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 export function createBroker() {
   const waiters = new Map(); // deviceId -> Set of functions that end a waiting request
   const woken = new Set();   // devices woken while they had no request open
-  const browse = new Map();  // deviceId -> Map(requestId -> { path, sent, resolve, timer })
+  const browse = new Map();  // deviceId -> Map(requestId -> { payload, sent, resolve, timer })
 
   function wake(deviceId) {
     const set = waiters.get(deviceId);
@@ -49,6 +49,12 @@ export function createBroker() {
 
     // Admin side: ask a device to list the folders inside `path`. Resolves with its answer.
     requestBrowse(deviceId, path, timeoutMs = 15_000) {
+      return this.requestAgent(deviceId, { path }, timeoutMs);
+    },
+
+    // Admin side: a request the agent answers straight away (a folder listing, or a folder lock
+    // action). Travels like a browse request: encrypted for that device, answered once.
+    requestAgent(deviceId, payload, timeoutMs = 15_000) {
       const id = crypto.randomBytes(9).toString("base64url");
       let requests = browse.get(deviceId);
       if (!requests) browse.set(deviceId, (requests = new Map()));
@@ -57,7 +63,7 @@ export function createBroker() {
           requests.delete(id);
           resolve({ error: "The device didn't answer in time. Is its agent running?" });
         }, timeoutMs);
-        requests.set(id, { path, sent: false, resolve, timer });
+        requests.set(id, { payload, sent: false, resolve, timer });
       });
       wake(deviceId);
       return promise;
@@ -69,7 +75,7 @@ export function createBroker() {
       for (const [id, r] of browse.get(deviceId) ?? []) {
         if (r.sent) continue;
         r.sent = true;
-        out.push({ id, path: r.path });
+        out.push({ id, ...r.payload });
       }
       return out;
     },

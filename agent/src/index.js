@@ -11,6 +11,7 @@ import { createRestorer } from "./restorer.js";
 import { createFolderManager } from "./folders.js";
 import { createPolicy } from "./policy.js";
 import { createSnapshots } from "./snapshot.js";
+import { createLock } from "./lock.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -45,7 +46,14 @@ const tracker = createTracker(db, (change) => {
   const hash = change.sha256 ? `  sha256:${change.sha256.slice(0, 12)}…` : "";
   log.info(`${change.type.padEnd(8)} ${change.relPath}${size}${hash}`);
   uploader?.trigger();
-}, { snapshots });
+}, {
+  snapshots,
+  skipPaths: [
+    config.dataDir,
+    ...(process.env.AGENT_LOG_FILE?.trim() ? [process.env.AGENT_LOG_FILE.trim()] : []),
+    ...(process.platform === "linux" ? ["/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "/lost+found"] : []),
+  ],
+});
 
 // Process one path at a time, in order, so checks never overlap
 let queue = Promise.resolve();
@@ -62,8 +70,14 @@ const watcher = startWatcher(
   (absPath) => enqueue(() => tracker.inspect(absPath)),
   () => folders.watchLimitReached()
 );
-const folders = createFolderManager({ config, db, tracker, watcher, enqueue, policy });
-log.info(`Allowed areas on this device: ${config.allowedPaths.join(", ")}`);
+// Once chosen, the backup folders can be locked on this device with a key (see lock.js)
+const lock = createLock({ db, current: () => db.listFolders() });
+const folders = createFolderManager({ config, db, tracker, watcher, enqueue, policy, lock });
+log.info(
+  config.fullAccess
+    ? `Full access: the whole device can be browsed and backed up (${config.allowedPaths.join(", ")})`
+    : `Allowed areas on this device: ${config.allowedPaths.join(", ")}`
+);
 await folders.init();
 enqueue(() => {
   log.info(`${db.countFiles()} files tracked, ${db.countPending()} changes waiting to send`);
@@ -78,7 +92,7 @@ try {
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
     folders: folders.report(),
-    background: { ...policy.status(), ...folders.scanStatus() },
+    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess },
   }));
 } catch (err) {
   log.error(err.message);

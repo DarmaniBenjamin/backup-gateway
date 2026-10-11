@@ -12,6 +12,11 @@ const IGNORED_NAMES = new Set([
   "#snapshot",     // Synology snapshots
   "$RECYCLE.BIN",  // Windows recycle bin
   "System Volume Information",
+  "pagefile.sys",  // Windows memory files: huge, always in use, useless in a backup
+  "hiberfil.sys",
+  "swapfile.sys",
+  "@tmp",          // Synology temporary files
+  "@sharebin",     // Synology recycle bin data
   "node_modules",
 ]);
 

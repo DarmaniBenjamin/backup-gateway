@@ -219,9 +219,9 @@ export default function FolderTree({ device, folders, onClose, onSaved }) {
             type="button"
             onClick={() => toggleOpen(p)}
             className={`min-w-0 flex-1 truncate text-left ${isArea ? "font-mono text-sm" : "text-sm"} ${
-              state === "blocked" ? "text-dim" : "text-fg"
+              state === "blocked" || entry.hidden ? "text-dim" : "text-fg"
             }`}
-            title={p}
+            title={entry.hidden ? `${p} (hidden or system folder)` : p}
           >
             {entry.name}
           </button>
@@ -390,8 +390,9 @@ export default function FolderTree({ device, folders, onClose, onSaved }) {
         </div>
 
         <p className="mt-3 text-dim">
-          The top level shows the allowed areas: the only places this device lets the gateway back up. They&rsquo;re set on the
-          device itself.
+          {device.fullAccess
+            ? "Full access: every drive and folder on the device, hidden and system ones too (shown dimmed). The device's own backup data is always skipped."
+            : "The top level shows the allowed areas: the only places this device lets the gateway back up. They\u2019re set on the device itself."}
         </p>
         {agentTooOld && (
           <p className="mt-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-warn">

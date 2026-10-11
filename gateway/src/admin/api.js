@@ -25,6 +25,7 @@
 //   POST /admin/api/alerts/:id/ack
 //   GET  /admin/api/devices/:id/folders                     backup folders + the device's allowed areas
 //   POST /admin/api/devices/:id/browse                      { path } list folders on the device (live)
+//   POST /admin/api/devices/:id/lock                        { action: lock|unlock|remove, key? } folder lock
 //   POST /admin/api/devices/:id/folders                     { path, excludes } start backing up a folder
 //   POST /admin/api/devices/:id/folders/:folderId/excludes  { excludes }
 //   POST /admin/api/devices/:id/folders/:folderId/remove    stop backing it up (backups are kept)
@@ -50,6 +51,7 @@ import {
 import { SettingsError, cleanSettings, settingsOf } from "../device-settings.js";
 import { CloudError, cleanCloudSettings, testCloud } from "../cloud/offsite.js";
 import { log } from "../logger.js";
+import crypto from "node:crypto";
 
 const ONLINE_WINDOW_MS = 90_000; // seen within 90 s (3 missed heartbeats) = online
 
@@ -450,6 +452,23 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     };
   }
 
+  const agentStatusOf = (d) => (d.agent_status ? JSON.parse(d.agent_status) : null);
+
+  // The device enforces the lock itself; refusing here too gives a clear message up front
+  function requireUnlocked(device) {
+    if (agentStatusOf(device)?.lock?.locked) {
+      throw new ApiError(423, "The backup folders are locked on this device. Unlock them with the unlock key first.");
+    }
+  }
+
+  // A new unlock key: BGFL- and 20 letters/digits (100 bits), shown once and never stored here
+  function newLockKey() {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    const bytes = crypto.randomBytes(20);
+    const chars = [...bytes].map((b) => alphabet[b & 31]).join("");
+    return `BGFL-${chars.match(/.{4}/g).join("-")}`;
+  }
+
   function requireMultiFolder(device) {
     if ((device.path_layout ?? 1) < 2) {
       throw new ApiError(409, "This device's agent is too old to manage folders. Update it to version 0.7 or newer.");
@@ -475,8 +494,42 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         allowedPaths: d.allowed_paths ? JSON.parse(d.allowed_paths) : [],
         folders: db.listFolders(d.id).map(publicFolder),
         settings: settingsOf(d),
-        agentStatus: d.agent_status ? JSON.parse(d.agent_status) : null,
+        agentStatus: agentStatusOf(d),
       };
+    },
+
+    // Folder lock. The device checks the key; this gateway never keeps it. "lock" the first time
+    // makes the key and returns it once; after an unlock, "lock" locks again with the same key.
+    async "POST /devices/:id/lock"({ params, body, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      requireMultiFolder(d);
+      if (!broker.isLive(d.id)) throw new ApiError(409, "The device must be connected to lock or unlock its folders.");
+      const action = String(body.action ?? "");
+      if (!["lock", "unlock", "remove"].includes(action)) throw new ApiError(400, "Unknown action");
+      const status = agentStatusOf(d);
+
+      let key = null;
+      let newKey = null;
+      if (action === "lock") {
+        if (!status?.lock?.enabled) key = newKey = newLockKey();
+      } else {
+        key = String(body.key ?? "").trim();
+        if (!key || key.length > 64) throw new ApiError(400, "Enter the unlock key.");
+      }
+
+      const result = await broker.requestAgent(d.id, { action, ...(key ? { key } : {}) }, 30_000);
+      if (result.error) {
+        if (action !== "lock") store.audit(admin.username, "folders.unlock-failed", { device: d.device_name, action }, ip);
+        throw new ApiError(400, result.error);
+      }
+      if (!result.lock) throw new ApiError(502, "The device didn't confirm. Is its agent up to date (0.13 or newer)?");
+
+      // Show the new state straight away (the next heartbeat confirms it)
+      db.setAgentStatus(d.id, { ...(status ?? {}), lock: result.lock });
+      const what = { lock: newKey ? "folders.locked-new-key" : "folders.locked", unlock: "folders.unlocked", remove: "folders.lock-removed" }[action];
+      store.audit(admin.username, what, { device: d.device_name }, ip);
+      log.info(`Admin "${admin.username}": ${what} on ${d.device_name}`);
+      return { lock: result.lock, ...(newKey ? { key: newKey } : {}) };
     },
 
     // Background settings: priority, upload speed limits, work hours, pauses, scan mode
@@ -515,6 +568,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     "POST /devices/:id/folders"({ params, body, admin, ip }) {
       const d = getDeviceOr404(params.id);
       requireMultiFolder(d);
+      requireUnlocked(d);
       const path = String(body.path ?? "").trim();
       if (!isValidDevicePath(path)) throw new ApiError(400, "Pick a folder on the device.");
       let excludes;
@@ -526,7 +580,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
 
       // The device enforces its allowed areas itself; checking here too gives a clear message up front
       const allowed = d.allowed_paths ? JSON.parse(d.allowed_paths) : [];
-      if (allowed.length && !allowed.some((a) => isInsidePath(path, a, d.platform))) {
+      if (!agentStatusOf(d)?.fullAccess && allowed.length && !allowed.some((a) => isInsidePath(path, a, d.platform))) {
         throw new ApiError(400, "That folder is outside the allowed areas set on this device.");
       }
 
@@ -564,6 +618,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
 
     "POST /devices/:id/folders/:folderId/excludes"({ params, body, admin, ip }) {
       const d = getDeviceOr404(params.id);
+      requireUnlocked(d);
       const f = db.getFolder(params.folderId);
       if (!f || f.device_id !== d.id || f.status !== "active") throw new ApiError(404, "Folder not found");
       let excludes;
@@ -581,6 +636,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     // and it can be added back later with its history intact.
     "POST /devices/:id/folders/:folderId/remove"({ params, admin, ip }) {
       const d = getDeviceOr404(params.id);
+      requireUnlocked(d);
       const f = db.getFolder(params.folderId);
       if (!f || f.device_id !== d.id) throw new ApiError(404, "Folder not found");
       if (!db.removeFolder(f.id, admin.username)) throw new ApiError(400, "This folder was already removed.");

@@ -81,7 +81,9 @@ export function cleanInstallOptions(body) {
   const platform = String(body.platform ?? "");
   if (!PLATFORMS.includes(platform)) throw new InstallError("This kind of device isn't supported yet.");
   const rules = PATHS[platform];
-  const allowed = cleanPathList(body.allowed, platform);
+  // Full access: the whole device can be browsed and backed up, and restored to anywhere
+  const fullAccess = body.fullAccess === true;
+  const allowed = fullAccess ? "*" : cleanPathList(body.allowed, platform);
   const name = String(body.deviceName ?? "").trim();
   if (name.length > 64 || !SAFE.linux.test(name)) throw new InstallError("Device name: up to 64 characters, no quotes, \\ or $.");
   const watch = rules.trim(String(body.watch ?? "").trim());
@@ -89,11 +91,11 @@ export function cleanInstallOptions(body) {
     if (!rules.isFull(watch) || watch.length > 500 || !SAFE[platform].test(watch)) {
       throw new InstallError(`The first folder to back up must be a full path, like ${rules.example}.`);
     }
-    if (!allowed.split(";").some((a) => rules.inside(watch, a))) {
+    if (!fullAccess && !allowed.split(";").some((a) => rules.inside(watch, a))) {
       throw new InstallError("The first folder to back up must be inside one of the allowed folders.");
     }
   }
-  return { platform, allowed, name, watch };
+  return { platform, allowed, fullAccess, name, watch };
 }
 
 // The address devices use to reach the agent API
@@ -118,7 +120,7 @@ const cleanName = (s) => s.replace(/[^\w .&()-]/g, "");
 
 function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
-  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, `--allowed ${q(options.allowed)}`];
+  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, options.fullAccess ? "--full-access" : `--allowed ${q(options.allowed)}`];
   if (options.name) args.push(`--name ${q(options.name)}`);
   if (options.watch) args.push(`--watch ${q(options.watch)}`);
   return `#!/usr/bin/env bash
@@ -161,7 +163,7 @@ main "$@"
 // volume, which DSM updates leave alone)
 function synologyScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
-  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, `--allowed ${q(options.allowed)}`];
+  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, options.fullAccess ? "--full-access" : `--allowed ${q(options.allowed)}`];
   if (options.name) args.push(`--name ${q(options.name)}`);
   if (options.watch) args.push(`--watch ${q(options.watch)}`);
   return `#!/bin/bash
@@ -206,7 +208,7 @@ main "$@"
 // window); the real installer runs as its own powershell.exe and reports back with its exit code.
 function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.zip`;
-  const args = [`-Gateway ${q(gatewayUrl)}`, `-Code ${q(code)}`, `-Allowed ${q(options.allowed)}`];
+  const args = [`-Gateway ${q(gatewayUrl)}`, `-Code ${q(code)}`, options.fullAccess ? "-FullAccess" : `-Allowed ${q(options.allowed)}`];
   if (options.name) args.push(`-Name ${q(options.name)}`);
   if (options.watch) args.push(`-Watch ${q(options.watch)}`);
   return `# Backup agent install for ${cleanName(clientName)}, made by the backup gateway.

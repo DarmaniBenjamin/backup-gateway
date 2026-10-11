@@ -53,6 +53,18 @@ it's installed), settings, keys and the log. If a big DSM update removes the ser
 `sudo /volume1/@backup-agent/app/install/synology/install.sh` to put it back; `uninstall.sh` next to
 it removes the agent (add `--purge` to also delete its identity). A Mac installer is coming.
 
+**Full access and the folder lock.** Normally a device only lets the gateway see the allowed folders
+given at install. Tick **Full access** in Add device instead to see every folder on the device (every
+drive, hidden and system folders too), back up anything and restore anywhere. The device's own data
+and log, and on Linux `/proc`, `/sys`, `/dev`, `/run` and `/tmp`, are always skipped. Full access can
+only be chosen at install (`AGENT_ALLOWED_PATHS="*"`); the gateway can't switch it on.
+
+Once the folders are right, click **Lock folders** on the device's page. The gateway shows an unlock
+key once (`BGFL-…`) and forgets it; the device keeps only a scrypt hash of it. While locked, the device
+keeps backing up exactly those folders and refuses any other list, even from a hacked gateway. To
+change them, click **Unlock** and enter the key: the device unlocks for 30 minutes, then locks again by
+itself. Five wrong keys in a row block tries for 15 minutes.
+
 ## Off-site copy (Backblaze B2 and other S3 storage)
 
 On the **Off-site** page, connect a bucket that has **Object Lock** turned on (Backblaze B2, Wasabi,

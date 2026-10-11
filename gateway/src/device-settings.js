@@ -71,5 +71,20 @@ export function cleanAgentStatus(s) {
     scanMode: s.scanMode === "scheduled" ? "scheduled" : "live",
     watchLimitHit: bool(s.watchLimitHit),
     lastScanAt: text(s.lastScanAt),
+    fullAccess: bool(s.fullAccess),
+    // Folder lock, as the device reports it (the device enforces it, not the gateway)
+    lock:
+      s.lock && typeof s.lock === "object"
+        ? {
+            enabled: bool(s.lock.enabled) ?? false,
+            locked: bool(s.lock.locked) ?? false,
+            lockedAt: text(s.lock.lockedAt),
+            unlockedUntil: text(s.lock.unlockedUntil),
+            refusedAt: text(s.lock.refusedAt),
+            folders: Array.isArray(s.lock.folders)
+              ? s.lock.folders.slice(0, 100).map((f) => ({ name: text(f?.name), path: typeof f?.path === "string" ? f.path.slice(0, 1024) : null }))
+              : [],
+          }
+        : null,
   };
 }

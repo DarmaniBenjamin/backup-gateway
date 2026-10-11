@@ -3,6 +3,9 @@
 // - The gateway decides WHICH folders to back up (you choose them in the web UI).
 // - This device decides WHERE that's allowed: only inside the allowed areas (AGENT_ALLOWED_PATHS).
 //   A folder outside them is refused, and the folder browser can't look outside them either.
+//   With full access (AGENT_ALLOWED_PATHS="*", chosen at install) that's everywhere.
+// - Once chosen, the folders can be locked on this device with a key (see lock.js): then the
+//   gateway can't change them without it.
 // - The last folder list received is kept in the local database, so backups keep running offline.
 // - Removing a folder makes the agent forget its files WITHOUT reporting them as deleted, so
 //   the gateway keeps every backup of them.
@@ -14,6 +17,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { open, seal } from "./crypto-box.js";
 import { isIgnored } from "./ignore.js";
+import { rootsOfThisDevice } from "./config.js";
+import { LockError } from "./lock.js";
 import { log } from "./logger.js";
 
 const MAX_BROWSE_ENTRIES = 1000;
@@ -31,7 +36,10 @@ function folderNameFromPath(p) {
   return (last || "Root").slice(0, 64);
 }
 
-export function createFolderManager({ config, db, tracker, watcher, enqueue, policy }) {
+export function createFolderManager({ config, db, tracker, watcher, enqueue, policy, lock }) {
+  const isAllowed = (real) => config.fullAccess || config.allowedPaths.some((a) => isInside(real, a));
+  // The top of the folder browser: every drive with full access (USB drives come and go), else the allowed areas
+  const roots = () => (config.fullAccess ? rootsOfThisDevice() : config.allowedPaths);
   let states = new Map(); // folder name -> { state, error }
   let connection = null;
   let synced = false;
@@ -78,11 +86,12 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
     } catch {
       return { state: "missing", error: "The folder doesn't exist on the device (deleted, renamed or drive unplugged)" };
     }
-    if (!config.allowedPaths.some((a) => isInside(real, a))) {
+    if (!isAllowed(real)) {
       return { state: "denied", error: "Outside the allowed areas set on this device (AGENT_ALLOWED_PATHS)" };
     }
-    if (isInside(config.dataDir, real) || isInside(real, config.dataDir)) {
-      return { state: "denied", error: "Contains the agent's own data folder" };
+    // A folder that contains the agent's own data folder is fine: that part is always skipped
+    if (isInside(real, config.dataDir)) {
+      return { state: "denied", error: "This is the agent's own data folder" };
     }
     const clash = accepted.find((a) => isInside(real, a.real) || isInside(a.real, real));
     if (clash) return { state: "denied", error: `Overlaps the folder "${clash.name}"` };
@@ -119,7 +128,8 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
   }
 
   // Apply the folder list from the gateway. Folders are matched by NAME, which never changes.
-  async function applyWanted(wanted) {
+  async function applyWanted(requested) {
+    const wanted = lock ? lock.enforce(requested) : requested; // locked: the gateway can't change them
     const current = new Map(db.listFolders().map((f) => [f.name, f]));
     const next = new Map(wanted.map((f) => [f.name, f]));
 
@@ -170,6 +180,8 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
     const body = {
       platform: process.platform,
       allowedPaths: config.allowedPaths,
+      fullAccess: config.fullAccess,
+      lock: lock?.status() ?? null,
       folders: report(),
       ...(legacyFolder ? { legacyFolder } : {}),
     };
@@ -273,7 +285,7 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
           path: "",
           parent: null,
           separator: path.sep,
-          entries: config.allowedPaths.map((a) => ({ name: a, path: a, backedUpAs: backedUp(a)?.name ?? null })),
+          entries: roots().map((a) => ({ name: a, path: a, backedUpAs: backedUp(a)?.name ?? null })),
         };
       }
       if (!path.isAbsolute(requested)) return { error: "Not a full path on this device" };
@@ -283,7 +295,7 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
       } catch {
         return { error: "That folder doesn't exist on the device" };
       }
-      if (!config.allowedPaths.some((a) => isInside(real, a))) {
+      if (!isAllowed(real)) {
         return { error: "That folder is outside the allowed areas set on this device" };
       }
 
@@ -293,12 +305,13 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
       } catch (err) {
         return { error: `The device can't open that folder (${err.code || err.message})` };
       }
+      // Every folder, hidden and system ones too (marked, so the web UI can show them dimmed)
       const dirs = entries
-        .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !isIgnored(path.join(real, e.name)) && !isInside(path.join(real, e.name), config.dataDir))
+        .filter((e) => e.isDirectory() && !isInside(path.join(real, e.name), config.dataDir))
         .map((e) => e.name)
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
-      const isRoot = config.allowedPaths.includes(real);
+      const isRoot = roots().includes(real);
       return {
         path: real,
         parent: isRoot ? "" : path.dirname(real),
@@ -308,19 +321,48 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue, pol
         truncated: dirs.length > MAX_BROWSE_ENTRIES,
         entries: dirs.slice(0, MAX_BROWSE_ENTRIES).map((name) => {
           const full = path.join(real, name);
-          return { name, path: full, backedUpAs: backedUp(full)?.name ?? null };
+          const hidden = name.startsWith(".") || name.startsWith("$") || isIgnored(full) || undefined;
+          return { name, path: full, backedUpAs: backedUp(full)?.name ?? null, ...(hidden ? { hidden } : {}) };
         }),
       };
     },
 
-    // Answer a browse request from the gateway (sealed so only the gateway can read it)
+    // Lock, unlock or turn off the folder lock (the key never leaves this request)
+    async lockAction(request) {
+      if (!lock) return { error: "This agent can't lock folders." };
+      try {
+        let status;
+        if (request.action === "lock") {
+          await this.sync(); // lock what the gateway last asked for, not an older list
+          status = lock.lock(request.key);
+        } else if (request.action === "unlock") {
+          status = lock.unlock(request.key);
+        } else if (request.action === "remove") {
+          status = lock.remove(request.key);
+        } else {
+          return { error: "Unknown lock action" };
+        }
+        if (request.action !== "lock") {
+          // Folder changes refused while locked can be applied now
+          db.deleteSetting("foldersVersion");
+          this.sync();
+        }
+        connection?.heartbeatNow();
+        return { lock: status };
+      } catch (err) {
+        if (err instanceof LockError) return { error: err.message };
+        throw err;
+      }
+    },
+
+    // Answer a browse (or lock) request from the gateway (sealed so only the gateway can read it)
     async answerBrowse(request) {
       try {
-        const result = await this.browse(request.path);
+        const result = request.action ? await this.lockAction(request) : await this.browse(request.path);
         const keys = await connection.ensureKeys();
         const box = seal(keys.encKey, Buffer.from(JSON.stringify({ id: request.id, ...result })), `browse-result:${connection.auth.deviceId}`);
         await connection.client.signedPostBinary("/api/browse/result", box, connection.auth);
-        log.debug(`Folder browser: listed ${request.path || "allowed areas"}`);
+        if (!request.action) log.debug(`Folder browser: listed ${request.path || "allowed areas"}`);
       } catch (err) {
         log.warn(`Could not answer a folder-browse request: ${err.message}`);
       }

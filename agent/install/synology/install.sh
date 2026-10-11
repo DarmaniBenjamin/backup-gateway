@@ -40,6 +40,9 @@ Usage: sudo $0 [options]
   --code CODE       One-time enrollment code from the gateway's web UI (Devices → Add device)
   --allowed PATHS   The ONLY folders the gateway may back up or browse, separated by ;
                     e.g. "/volume1/Clients;/volume1/homes"
+  --full-access     Instead of --allowed: the gateway may browse and back up anything on the NAS
+                    (every volume and the system), and restore anywhere. Folders can then be
+                    locked with a key.
   --watch DIR       Optional first folder to back up (must be inside an allowed folder)
   --name NAME       Device name shown in the web UI (default: the NAS's name)
   -h, --help        Show this help
@@ -49,7 +52,7 @@ with no options.
 EOF
   }
 
-  local GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME=""
+  local GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME="" FULL=no
   while [ $# -gt 0 ]; do
     case "$1" in
       --gateway) GATEWAY=${2-}; shift 2 ;;
@@ -57,6 +60,7 @@ EOF
       --allowed) ALLOWED=${2-}; shift 2 ;;
       --watch) WATCH=${2-}; shift 2 ;;
       --name) NAME=${2-}; shift 2 ;;
+      --full-access) FULL=yes; shift ;;
       -h | --help) usage; exit 0 ;;
       *) usage; die "unknown option: $1" ;;
     esac
@@ -104,7 +108,9 @@ EOF
   LOG_LEVEL=${LOG_LEVEL:-info}
 
   [ -n "$GATEWAY" ] || { usage; die "--gateway is needed for the first install."; }
-  [ -n "$ALLOWED" ] || { usage; die "--allowed is needed for the first install."; }
+  [ "$FULL" = yes ] && ALLOWED="*"
+  [ "$ALLOWED" = "*" ] && FULL=yes
+  [ -n "$ALLOWED" ] || { usage; die "--allowed (or --full-access) is needed for the first install."; }
 
   [[ "$GATEWAY" =~ ^https?://[^[:space:]/]+(/[^[:space:]]*)?$ ]] || die "--gateway must look like http://192.168.1.10:8080"
   GATEWAY=${GATEWAY%/}
@@ -115,7 +121,7 @@ EOF
 
   # Allowed areas: shared folders (or folders inside them) on a data volume
   local ALLOWED_LIST=() p real parts=()
-  IFS=';' read -r -a parts <<<"$ALLOWED"
+  if [ "$FULL" = yes ]; then ALLOWED_LIST=(/); else IFS=';' read -r -a parts <<<"$ALLOWED"; fi
   for p in "${parts[@]}"; do
     p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     [ -n "$p" ] || continue
@@ -128,9 +134,10 @@ EOF
     ALLOWED_LIST+=("$real")
   done
   [ ${#ALLOWED_LIST[@]} -gt 0 ] || die "--allowed has no folders in it."
-  ALLOWED=$(IFS=';'; printf '%s' "${ALLOWED_LIST[*]}")
+  [ "$FULL" = yes ] || ALLOWED=$(IFS=';'; printf '%s' "${ALLOWED_LIST[*]}")
 
   inside_allowed() {
+    [ "$FULL" = yes ] && return 0
     local a
     for a in "${ALLOWED_LIST[@]}"; do [[ "$1" = "$a" || "$1" = "$a"/* ]] && return 0; done
     return 1
@@ -143,7 +150,14 @@ EOF
   fi
 
   if [ -z "$PREFIX" ]; then
-    PREFIX=/$(printf '%s' "${ALLOWED_LIST[0]}" | cut -d/ -f2)/@backup-agent
+    local VOL
+    if [ "$FULL" = yes ]; then
+      for VOL in /volume[0-9]*; do [ -d "$VOL" ] && break; done
+      [ -d "$VOL" ] || die "no data volume (/volume1...) found on this NAS."
+    else
+      VOL=/$(printf '%s' "${ALLOWED_LIST[0]}" | cut -d/ -f2)
+    fi
+    PREFIX=$VOL/@backup-agent
   fi
   CONF=$PREFIX/agent.env
   local DATA_DIR=$PREFIX/data
@@ -159,7 +173,7 @@ EOF
   [ "$ENROLLED" = yes ] && CODE=""
 
   echo "  Gateway:         $GATEWAY"
-  echo "  Allowed folders: ${ALLOWED//;/, }"
+  if [ "$FULL" = yes ]; then echo "  Allowed folders: everything (full access)"; else echo "  Allowed folders: ${ALLOWED//;/, }"; fi
   [ -n "$WATCH" ] && echo "  First folder:    $WATCH"
   echo "  Device name:     $NAME"
   echo "  Installed in:    $PREFIX"

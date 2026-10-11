@@ -33,7 +33,14 @@ function splitExcludes(excludes) {
   return { patterns: names, subPaths: paths };
 }
 
-export function createTracker(db, onChange, { snapshots = null } = {}) {
+// skipPaths: never backed up, even inside a backup folder (the agent's own data and log, and on
+// Linux the system's virtual folders like /proc), which matters most with full access
+export function createTracker(db, onChange, { snapshots = null, skipPaths = [] } = {}) {
+  const skip = skipPaths.map((p) => comparable(path.resolve(p)));
+  const isSkipped = (absPath) => {
+    const p = comparable(absPath);
+    return skip.some((s) => p === s || p.startsWith(s.endsWith(path.sep) ? s : s + path.sep));
+  };
   let folders = []; // [{ id, name, path, excludes, patterns }]
 
   // The backup folder an absolute path is in (or null)
@@ -61,7 +68,7 @@ export function createTracker(db, onChange, { snapshots = null } = {}) {
 
   // Built-in rules (temp files, recycle bins...) plus the folder's own exclusion patterns
   function isExcluded(absPath) {
-    if (isIgnored(absPath)) return true;
+    if (isIgnored(absPath) || isSkipped(absPath)) return true;
     const f = folderFor(absPath);
     if (!f || (f.patterns.length === 0 && f.subPaths.length === 0)) return false;
     const parts = path.relative(f.path, absPath).split(path.sep).filter(Boolean);

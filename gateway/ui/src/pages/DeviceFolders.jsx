@@ -15,6 +15,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
 import FolderTree from "../components/FolderTree.jsx";
 import DeviceSettings from "../components/DeviceSettings.jsx";
+import FolderLock from "../components/FolderLock.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const STATE = {
@@ -34,7 +35,7 @@ function FolderState({ folder }) {
   );
 }
 
-function FolderRow({ folder, onEdit, onRemove }) {
+function FolderRow({ folder, onEdit, onRemove, locked }) {
   return (
     <li className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-6">
       <div className="min-w-0">
@@ -54,10 +55,10 @@ function FolderRow({ folder, onEdit, onRemove }) {
         </p>
       </div>
       <div className="flex gap-2">
-        <button type="button" className={secondaryButton} onClick={() => onEdit(folder)}>
+        <button type="button" className={secondaryButton} disabled={locked} title={locked ? "Unlock the folders first" : undefined} onClick={() => onEdit(folder)}>
           Skip rules
         </button>
-        <button type="button" className={secondaryButton} onClick={() => onRemove(folder)}>
+        <button type="button" className={secondaryButton} disabled={locked} title={locked ? "Unlock the folders first" : undefined} onClick={() => onRemove(folder)}>
           Remove
         </button>
       </div>
@@ -186,7 +187,10 @@ export default function DeviceFolders() {
   const { device, multiFolder, allowedPaths } = data;
   const active = data.folders.filter((f) => f.status === "active");
   const removed = data.folders.filter((f) => f.status === "removed");
-  const canAdd = multiFolder && device.live;
+  const lock = data.agentStatus?.lock ?? null;
+  const locked = !!lock?.locked;
+  const fullAccess = !!data.agentStatus?.fullAccess;
+  const canAdd = multiFolder && device.live && !locked;
 
   async function readd(folder) {
     setReadding(folder.id);
@@ -224,7 +228,7 @@ export default function DeviceFolders() {
               type="button"
               className={primaryButton}
               disabled={!canAdd}
-              title={canAdd ? undefined : "The device must be connected"}
+              title={canAdd ? undefined : locked ? "Unlock the folders first" : "The device must be connected"}
               onClick={() => setPicking(true)}
             >
               <FolderTreeIcon size={16} aria-hidden="true" />
@@ -251,6 +255,10 @@ export default function DeviceFolders() {
         </p>
       )}
 
+      {multiFolder && (
+        <FolderLock deviceId={device.id} lock={lock} live={device.live} folderCount={active.length} onChanged={reload} />
+      )}
+
       <section className="mb-10">
         <h2 className="mb-3 font-medium">Backup folders</h2>
         {active.length === 0 ? (
@@ -269,7 +277,7 @@ export default function DeviceFolders() {
         ) : (
           <ul className="divide-y divide-edge rounded-lg border border-edge bg-surface">
             {active.map((f) => (
-              <FolderRow key={f.id} folder={f} onEdit={setEditing} onRemove={setRemoving} />
+              <FolderRow key={f.id} folder={f} onEdit={setEditing} onRemove={setRemoving} locked={locked} />
             ))}
           </ul>
         )}
@@ -300,7 +308,7 @@ export default function DeviceFolders() {
                     Removed {timeAgo(f.removedAt)} by {f.removedBy}
                   </p>
                 </div>
-                <button type="button" className={secondaryButton} disabled={!multiFolder || readding === f.id} onClick={() => readd(f)}>
+                <button type="button" className={secondaryButton} disabled={!multiFolder || locked || readding === f.id} onClick={() => readd(f)}>
                   {readding === f.id ? "Adding" : "Add back"}
                 </button>
               </li>
@@ -316,10 +324,13 @@ export default function DeviceFolders() {
           Allowed areas
         </h2>
         <p className="mb-3 mt-1 max-w-2xl text-sm text-dim">
-          The only places this device lets the gateway back up or browse. They&rsquo;re set on the device itself
-          (AGENT_ALLOWED_PATHS), so even someone with access to this gateway can&rsquo;t reach anything else.
+          {fullAccess
+            ? "This device was installed with full access: the whole device can be browsed, backed up and restored to. Lock the folders above so they can't be changed without the key."
+            : "The only places this device lets the gateway back up or browse. They\u2019re set on the device itself (AGENT_ALLOWED_PATHS), so even someone with access to this gateway can\u2019t reach anything else."}
         </p>
-        {allowedPaths.length === 0 ? (
+        {fullAccess ? (
+          <p className="text-sm text-fg">Everything on this device</p>
+        ) : allowedPaths.length === 0 ? (
           <p className="text-sm text-dim">Not reported yet.</p>
         ) : (
           <ul className="space-y-1">
@@ -334,7 +345,7 @@ export default function DeviceFolders() {
 
       {picking && (
         <FolderTree
-          device={{ ...device, platform: data.platform }}
+          device={{ ...device, platform: data.platform, fullAccess }}
           folders={active}
           onClose={() => setPicking(false)}
           onSaved={() => {

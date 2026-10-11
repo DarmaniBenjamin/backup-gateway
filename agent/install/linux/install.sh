@@ -41,6 +41,8 @@ Usage: sudo $0 [options]
   --code CODE       One-time enrollment code from the gateway's web UI (Devices → Add device)
   --allowed PATHS   The ONLY folders the gateway may back up or browse, separated by ;
                     e.g. "/home;/srv/shared"
+  --full-access     Instead of --allowed: the gateway may browse and back up anything on this
+                    computer, and restore anywhere. Folders can then be locked with a key.
   --watch DIR       Optional first folder to back up (must be inside an allowed folder).
                     More folders can be added from the web UI later.
   --name NAME       Device name shown in the web UI (default: this computer's hostname)
@@ -50,7 +52,7 @@ The first install needs --gateway, --code and --allowed. To upgrade, run it agai
 EOF
 }
 
-GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME=""
+GATEWAY="" CODE="" ALLOWED="" WATCH="" NAME="" FULL=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --gateway) GATEWAY=${2-}; shift 2 ;;
@@ -58,6 +60,7 @@ while [ $# -gt 0 ]; do
     --allowed) ALLOWED=${2-}; shift 2 ;;
     --watch) WATCH=${2-}; shift 2 ;;
     --name) NAME=${2-}; shift 2 ;;
+    --full-access) FULL=yes; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage; die "unknown option: $1" ;;
   esac
@@ -88,7 +91,9 @@ LOG_LEVEL=$(current AGENT_LOG_LEVEL)
 LOG_LEVEL=${LOG_LEVEL:-info}
 
 [ -n "$GATEWAY" ] || { usage; die "--gateway is needed for the first install."; }
-[ -n "$ALLOWED" ] || { usage; die "--allowed is needed for the first install."; }
+[ "$FULL" = yes ] && ALLOWED="*"
+[ "$ALLOWED" = "*" ] && FULL=yes
+[ -n "$ALLOWED" ] || { usage; die "--allowed (or --full-access) is needed for the first install."; }
 if [ "$ENROLLED" = no ] && [ -z "$CODE" ]; then
   usage
   die "--code is needed: this device isn't enrolled yet. Create a code in the web UI (Devices → Add device)."
@@ -104,9 +109,10 @@ GATEWAY=${GATEWAY%/}
 safe_text() { [[ "$2" != *[\"\\\$\`]* && "$2" != *$'\n'* ]] || die "$1 can't contain \" \\ \$ \` or line breaks: $2"; }
 safe_text "--name" "$NAME"
 
-# Allowed areas: absolute, existing folders; stored as their real paths
+# Allowed areas: absolute, existing folders; stored as their real paths. Full access: everything.
 ALLOWED_LIST=()
-IFS=';' read -r -a parts <<<"$ALLOWED"
+parts=()
+if [ "$FULL" = yes ]; then ALLOWED_LIST=(/); else IFS=';' read -r -a parts <<<"$ALLOWED"; fi
 for p in "${parts[@]}"; do
   p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   [ -n "$p" ] || continue
@@ -121,9 +127,10 @@ for p in "${parts[@]}"; do
   ALLOWED_LIST+=("$real")
 done
 [ ${#ALLOWED_LIST[@]} -gt 0 ] || die "--allowed has no folders in it."
-ALLOWED=$(IFS=';'; printf '%s' "${ALLOWED_LIST[*]}")
+[ "$FULL" = yes ] || ALLOWED=$(IFS=';'; printf '%s' "${ALLOWED_LIST[*]}")
 
 inside_allowed() {
+  [ "$FULL" = yes ] && return 0
   local a
   for a in "${ALLOWED_LIST[@]}"; do
     [[ "$1" = "$a" || "$1" = "$a"/* ]] && return 0
@@ -138,7 +145,7 @@ if [ -n "$WATCH" ]; then
 fi
 
 echo "  Gateway:         $GATEWAY"
-echo "  Allowed folders: ${ALLOWED//;/, }"
+if [ "$FULL" = yes ]; then echo "  Allowed folders: everything (full access)"; else echo "  Allowed folders: ${ALLOWED//;/, }"; fi
 [ -n "$WATCH" ] && echo "  First folder:    $WATCH"
 echo "  Device name:     $NAME"
 [ "$UPGRADE" = yes ] && echo "  (upgrading the existing install, the device keeps its identity)"

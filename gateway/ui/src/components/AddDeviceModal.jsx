@@ -184,6 +184,7 @@ export default function AddDeviceModal({ clients, onClose }) {
     if (EXAMPLES[id] && defaults.includes(allowed)) setAllowed(EXAMPLES[id].allowed);
     setPlatform(id);
   }
+  const [fullAccess, setFullAccess] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [watch, setWatch] = useState("");
   const [result, setResult] = useState(null);
@@ -196,7 +197,7 @@ export default function AddDeviceModal({ clients, onClose }) {
     setError("");
     try {
       const body = { clientName: clientName.trim() };
-      if (platform !== "manual") Object.assign(body, { platform, allowed, deviceName, watch });
+      if (platform !== "manual") Object.assign(body, { platform, allowed, fullAccess, deviceName, watch });
       setResult(await api.post("/enrollment-codes", body));
     } catch (err) {
       setError(err.message);
@@ -207,7 +208,7 @@ export default function AddDeviceModal({ clients, onClose }) {
 
   if (result) return <Result result={result} onClose={onClose} />;
 
-  const canCreate = clientName.trim() && (platform === "manual" || allowed.trim());
+  const canCreate = clientName.trim() && (platform === "manual" || fullAccess || allowed.trim());
   return (
     <Modal
       title="Add a device"
@@ -282,26 +283,44 @@ export default function AddDeviceModal({ clients, onClose }) {
 
         {examples && (
           <>
-            <Field
-              id="allowed"
-              label="Allowed folders"
-              hint={
-                <>
-                  The only folders the gateway may ever back up or browse on this device, separated by{" "}
-                  <span className="font-mono text-fg">;</span> — e.g.{" "}
-                  <span className="font-mono text-fg">{examples.allowedMany}</span>. They&rsquo;re locked in on the device itself.
-                </>
-              }
-            >
+            <label className="flex cursor-pointer gap-3 rounded-md border border-edge bg-raised/40 px-4 py-3">
               <input
-                id="allowed"
-                autoComplete="off"
-                spellCheck={false}
-                value={allowed}
-                onChange={(e) => setAllowed(e.target.value)}
-                className={`${inputClass} font-mono`}
+                type="checkbox"
+                checked={fullAccess}
+                onChange={(e) => setFullAccess(e.target.checked)}
+                className="mt-1 size-4 shrink-0 accent-signal"
               />
-            </Field>
+              <span className="text-sm">
+                <span className="font-medium text-fg">Full access</span>
+                <span className="mt-0.5 block text-dim">
+                  See every folder on this device, hidden and system ones too, back up anything and restore anywhere. Once
+                  you&rsquo;ve chosen the folders, lock them with a key so they can&rsquo;t be changed without it. This can only
+                  be set here, when the device is installed.
+                </span>
+              </span>
+            </label>
+            {!fullAccess && (
+              <Field
+                id="allowed"
+                label="Allowed folders"
+                hint={
+                  <>
+                    The only folders the gateway may ever back up or browse on this device, separated by{" "}
+                    <span className="font-mono text-fg">;</span> — e.g.{" "}
+                    <span className="font-mono text-fg">{examples.allowedMany}</span>. They&rsquo;re locked in on the device itself.
+                  </>
+                }
+              >
+                <input
+                  id="allowed"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={allowed}
+                  onChange={(e) => setAllowed(e.target.value)}
+                  className={`${inputClass} font-mono`}
+                />
+              </Field>
+            )}
             <div className="grid gap-5 sm:grid-cols-2">
               <Field id="device-name" label="Device name (optional)" hint="Empty = the computer's own name.">
                 <input
@@ -313,7 +332,11 @@ export default function AddDeviceModal({ clients, onClose }) {
                   className={inputClass}
                 />
               </Field>
-              <Field id="watch" label="Start backing up (optional)" hint="A folder inside the allowed ones. Add more later.">
+              <Field
+                id="watch"
+                label="Start backing up (optional)"
+                hint={fullAccess ? "Any folder on the device. Add more later." : "A folder inside the allowed ones. Add more later."}
+              >
                 <input
                   id="watch"
                   autoComplete="off"

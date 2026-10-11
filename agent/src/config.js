@@ -18,6 +18,22 @@ function isInside(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+// Full access: every drive (Windows) or the whole file system (Linux, Synology). Chosen when the
+// device is installed (AGENT_ALLOWED_PATHS="*"); the gateway can never switch it on by itself.
+export function rootsOfThisDevice() {
+  if (process.platform !== "win32") return ["/"];
+  const drives = [];
+  for (let c = 67; c <= 90; c++) { // C: to Z: (A: and B: are floppy drives)
+    const root = `${String.fromCharCode(c)}:\\`;
+    try {
+      if (fs.statSync(root).isDirectory()) drives.push(root);
+    } catch {
+      // no such drive
+    }
+  }
+  return drives;
+}
+
 export function loadConfig() {
   // The first folder to back up. Only used the very first time; after that, folders are
   // managed from the web UI. Optional: a device can start with no folders.
@@ -32,7 +48,10 @@ export function loadConfig() {
   // Set here, on the device itself, so even a compromised gateway can't reach anything else.
   // Several paths are separated with ";". Default: the watch folder, or the user's home folder.
   const allowedSetting = process.env.AGENT_ALLOWED_PATHS?.trim();
-  const allowedRaw = allowedSetting
+  const fullAccess = allowedSetting === "*";
+  const allowedRaw = fullAccess
+    ? rootsOfThisDevice()
+    : allowedSetting
     ? allowedSetting.split(";").map((p) => p.trim()).filter(Boolean)
     : [watchDir ?? os.homedir()];
   const allowedPaths = [];
@@ -67,6 +86,7 @@ export function loadConfig() {
 
   return {
     watchDir,
+    fullAccess,
     allowedPaths,
     dataDir: fs.realpathSync(dataDir),
     gatewayUrl,

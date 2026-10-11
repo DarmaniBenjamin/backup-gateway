@@ -9,6 +9,8 @@
     powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1 `
       -Gateway http://192.168.1.10:8080 -Code ABCD-EFGH-JKLM -Allowed "C:\Users;D:\Shared"
   Upgrade (keeps the settings and the device's identity): run it again from a newer copy, no options.
+  -FullAccess instead of -Allowed: the gateway may browse and back up anything on this PC (every
+  drive, hidden and system folders too) and restore anywhere. Folders can then be locked with a key.
 
   What it sets up:
     C:\Program Files\BackupAgent\app        the agent's code
@@ -25,7 +27,8 @@ param(
   [string]$Code = "",
   [string]$Allowed = "",
   [string]$Watch = "",
-  [string]$Name = ""
+  [string]$Name = "",
+  [switch]$FullAccess
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,7 +106,9 @@ try {
   if (-not $logLevel) { $logLevel = "info" }
 
   if (-not $Gateway) { throw "-Gateway is needed for the first install, e.g. -Gateway http://192.168.1.10:8080" }
-  if (-not $Allowed) { throw "-Allowed is needed for the first install, e.g. -Allowed ""C:\Users;D:\Shared""" }
+  if ($FullAccess) { $Allowed = "*" }
+  $everything = ($Allowed -eq "*")
+  if (-not $Allowed) { throw "-Allowed (or -FullAccess) is needed for the first install, e.g. -Allowed ""C:\Users;D:\Shared""" }
   if ($enrolled) { $Code = "" } # already enrolled: a code is never needed again
   elseif (-not $Code) { throw "-Code is needed: this device isn't enrolled yet. Create a code in the web UI (Devices > Add device)." }
 
@@ -114,7 +119,8 @@ try {
 
   # Allowed areas: full paths of existing folders, never a whole drive
   $allowedList = @()
-  foreach ($part in $Allowed.Split(";")) {
+  $parts = if ($everything) { @() } else { $Allowed.Split(";") }
+  foreach ($part in $parts) {
     $p = $part.Trim()
     if (-not $p) { continue }
     Assert-SafeText "Allowed folder" $p
@@ -127,19 +133,21 @@ try {
     }
     $allowedList += $full
   }
-  if ($allowedList.Count -eq 0) { throw "-Allowed has no folders in it." }
-  $Allowed = $allowedList -join ";"
+  if (-not $everything) {
+    if ($allowedList.Count -eq 0) { throw "-Allowed has no folders in it." }
+    $Allowed = $allowedList -join ";"
+  }
 
   if ($Watch) {
     Assert-SafeText "-Watch" $Watch
     if (-not (Test-Path -LiteralPath $Watch -PathType Container)) { throw "-Watch folder doesn't exist: $Watch" }
     $Watch = (Get-Item -LiteralPath $Watch).FullName.TrimEnd("\")
-    $inside = $allowedList | Where-Object { $Watch -ieq $_ -or $Watch.StartsWith("$_\", [StringComparison]::OrdinalIgnoreCase) }
+    $inside = $everything -or ($allowedList | Where-Object { $Watch -ieq $_ -or $Watch.StartsWith("$_\", [StringComparison]::OrdinalIgnoreCase) })
     if (-not $inside) { throw "-Watch folder must be inside one of the allowed folders: $Watch" }
   }
 
   Write-Host "  Gateway:         $Gateway"
-  Write-Host "  Allowed folders: $($allowedList -join ', ')"
+  if ($everything) { Write-Host "  Allowed folders: everything (full access)" } else { Write-Host "  Allowed folders: $($allowedList -join ', ')" }
   if ($Watch) { Write-Host "  First folder:    $Watch" }
   Write-Host "  Device name:     $Name"
   if ($upgrade) { Write-Host "  (upgrading the existing install, the device keeps its identity)" }
