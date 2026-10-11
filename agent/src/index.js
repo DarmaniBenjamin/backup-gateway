@@ -98,7 +98,7 @@ try {
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
     folders: folders.report(),
-    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status(), update: updater.status() },
+    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status(), update: updater.status(), uninstall: updater.uninstallStatus() },
   }));
 } catch (err) {
   log.error(err.message);
@@ -113,6 +113,8 @@ if (connection) {
   connection.onBrowse((request) => folders.answerBrowse(request));
   connection.onUpdate((offer, ctx) => updater.handle(offer, ctx));
   connection.onOnline(() => updater.alive()); // a waiting updater knows this version came up fine
+  // Uninstall from the web UI: refused while the folder lock is on (see updater.js)
+  connection.onUninstall((order, ctx) => updater.uninstall(order, { ...ctx, locked: lock.isLocked(), heartbeatNow: connection.heartbeatNow }));
   folders.whenSynced(() => {
     uploader = createUploader({ db, tracker, connection, policy, snapshots });
     uploader.trigger();

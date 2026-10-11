@@ -11,6 +11,9 @@
 //   result.json     how the last update went (written by the updater)
 //   alive.json      written by the agent once it's connected: the updater waits for this
 //
+// The same updater also uninstalls the agent when the web UI asks (request.json with action
+// "uninstall" and the gateway's signed order). That's refused while the folder lock is on.
+//
 // AGENT_UPDATER (set by the installer) says how to reach the updater: "systemd" (a path unit
 // watches request.json) or "windows-task" (an on-demand scheduled task).
 
@@ -37,6 +40,7 @@ export function createUpdater({ dataDir, version, mechanism = process.env.AGENT_
   const capable = mechanism === "systemd" || mechanism === "windows-task";
   const state = { state: "idle", version: null, error: null, at: null };
   let busy = false;
+  let removal = null; // { state: uninstalling | refused | failed, error, at }
 
   const file = (name) => path.join(dir, name);
   const readJson = (name) => {
@@ -56,7 +60,9 @@ export function createUpdater({ dataDir, version, mechanism = process.env.AGENT_
 
   // How the last update went (the updater left result.json)
   const last = readJson("result.json");
-  if (last?.version) {
+  if (last?.action === "uninstall") {
+    if (!last.ok) removal = { order: last.order ?? null, state: "failed", error: last.error ?? "The uninstall failed.", at: last.at };
+  } else if (last?.version) {
     if (last.ok && last.version === version) set("done", { version });
     else if (!last.ok) set("failed", { version: last.version, error: last.error ?? "The update failed." });
   }
@@ -73,9 +79,67 @@ export function createUpdater({ dataDir, version, mechanism = process.env.AGENT_
     return Promise.resolve();
   }
 
+  // The gateway's signed message is checked here, and again by the updater with its own key
+  function checkSigned(offer, identity, saveIdentity) {
+    if (!identity.gatewayUpdateKey) {
+      identity.gatewayUpdateKey = offer.publicKey;
+      saveIdentity(identity);
+    } else if (identity.gatewayUpdateKey !== offer.publicKey) {
+      throw new Error("The gateway's update key changed. Refused (reinstall the agent if the gateway was rebuilt).");
+    }
+    const text = offer.manifest ?? offer.order;
+    if (!crypto.verify(null, Buffer.from(text), keyFromB64(identity.gatewayUpdateKey), Buffer.from(offer.signature, "base64"))) {
+      throw new Error("The gateway's signature doesn't match. Refused.");
+    }
+  }
+
   return {
     capable,
     status: () => ({ capable, mechanism, ...state }),
+    uninstallStatus: () => removal,
+
+    // Uninstall order from the gateway (already decrypted): { order, signature, publicKey }
+    async uninstall(offer, { identity, saveIdentity, locked, heartbeatNow }) {
+      if (removal?.state === "uninstalling") return;
+      try {
+        if (!capable) throw new Error("This agent has no updater, so it can't uninstall itself. Uninstall it on the device.");
+        checkSigned(offer, identity, saveIdentity);
+        const order = JSON.parse(offer.order);
+        if (order.format !== "backup-agent-uninstall" || order.deviceId !== identity.deviceId) throw new Error("The uninstall order isn't for this device.");
+        if (locked) {
+          const first = removal?.state !== "refused" || removal?.order !== order.id;
+          removal = { order: order.id, state: "refused", error: "The folder lock is on. Unlock it with its key and it uninstalls straight after.", at: new Date().toISOString() };
+          if (first) {
+            log.warn("Asked to uninstall, but the folder lock is on: unlock it with its key first");
+            setTimeout(() => heartbeatNow?.().catch(() => {}), 0); // tell the gateway now
+          }
+          return;
+        }
+        removal = { order: order.id, state: "uninstalling", error: null, at: new Date().toISOString() };
+        log.warn(`Uninstalling this agent, as asked by ${order.by ?? "the gateway"}. The backed-up files on this device aren't touched.`);
+        // Tell the gateway first: once the updater starts, this agent stops
+        await new Promise((r) => setTimeout(r, 0));
+        await heartbeatNow?.().catch(() => {});
+        fs.rmSync(file("result.json"), { force: true });
+        writeAtomic("request.json", JSON.stringify({ action: "uninstall", order: offer.order, signature: offer.signature, at: new Date().toISOString() }));
+        await trigger();
+        // Still here after 5 minutes: the updater failed (it says why in result.json)
+        setTimeout(() => {
+          const result = readJson("result.json");
+          if (result?.action === "uninstall" && !result.ok) removal = { order: removal.order, state: "failed", error: result.error ?? "The uninstall failed.", at: new Date().toISOString() };
+          else if (!result) removal = { order: removal.order, state: "failed", error: "The updater didn't start. Is backup-agent-update installed?", at: new Date().toISOString() };
+        }, 5 * 60_000).unref();
+      } catch (err) {
+        log.warn(`Uninstall failed: ${err.message}`);
+        let id = null;
+        try {
+          id = JSON.parse(offer.order).id ?? null;
+        } catch {
+          id = null;
+        }
+        removal = { order: id, state: "failed", error: err.message, at: new Date().toISOString() };
+      }
+    },
 
     // Called once the agent is connected: tells a waiting updater that this version came up fine
     alive() {
@@ -94,15 +158,7 @@ export function createUpdater({ dataDir, version, mechanism = process.env.AGENT_
       set("downloading", { version: offer.version });
       try {
         // The update key is pinned the first time it's seen; a different one is refused
-        if (!identity.gatewayUpdateKey) {
-          identity.gatewayUpdateKey = offer.publicKey;
-          saveIdentity(identity);
-        } else if (identity.gatewayUpdateKey !== offer.publicKey) {
-          throw new Error("The gateway's update key changed. Update refused (reinstall the agent if the gateway was rebuilt).");
-        }
-        if (!crypto.verify(null, Buffer.from(offer.manifest), keyFromB64(identity.gatewayUpdateKey), Buffer.from(offer.signature, "base64"))) {
-          throw new Error("The update's signature doesn't match. Update refused.");
-        }
+        checkSigned(offer, identity, saveIdentity);
         const manifest = JSON.parse(offer.manifest);
         if (manifest.format !== "backup-agent-update" || manifest.version !== offer.version) throw new Error("The update's manifest doesn't match the offer.");
         const kind = process.platform === "win32" ? "zip" : "tar";

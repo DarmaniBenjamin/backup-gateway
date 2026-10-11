@@ -16,6 +16,9 @@ import { createInstalls } from "./installs.js";
 import { createCopies } from "./cloud/copies.js";
 import { createScanner } from "./scanner.js";
 import { createSecurity } from "./security.js";
+import { createNotify } from "./notify/notify.js";
+import { createHealth } from "./health.js";
+import { createRemovals } from "./removals.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -51,12 +54,21 @@ const updateKey = loadOrCreateUpdateKey(config.dataDir);
 const installs = createInstalls({ config, store, agentPackage, windowsSetup, updateKey });
 // Automatic agent updates: devices on an older agent are offered this gateway's version
 const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updateKey, security });
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage });
+// Uninstalling agents from the web UI (signed with the same update key)
+const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker });
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
-const copies = createCopies({ db, dataDir: config.dataDir, storage });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates });
+const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
+// Alerts by phone push, email or webhook, and the checks for devices offline and disk space
+const notify = createNotify({ db, dataDir: config.dataDir, security });
+const health = createHealth({ db, dataDir: config.dataDir, security, settings: notify.settings, skipDevice: removals.inProgress });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals });
 copies.start();
+notify.start();
 security.start({ pendingCleared: () => copies.syncNow() });
+health.start();
+const removalTimer = setInterval(() => removals.tick(), 60_000);
+removalTimer.unref();
 
 function onListenError(name, port) {
   return (err) => {
@@ -87,6 +99,9 @@ function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
   copies.stop();
   security.stop();
+  notify.stop();
+  health.stop();
+  clearInterval(removalTimer);
   adminServer.close();
   server.close(() => {
     db.close();

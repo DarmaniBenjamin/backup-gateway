@@ -55,6 +55,7 @@ export async function connectToGateway(config, getStatus) {
   let foldersHandler = null;
   let browseHandler = null;
   let updateHandler = null;
+  let uninstallHandler = null;
   let onlineHandler = null;
   let stopped = false;
 
@@ -124,6 +125,16 @@ export async function connectToGateway(config, getStatus) {
           log.warn("Ignored an update offer: failed its integrity check");
         }
       }
+
+      // Uninstall, asked for in the web UI: signed by the gateway, encrypted for this device
+      if (reply.uninstall) {
+        try {
+          const order = JSON.parse(open(k.encKey, Buffer.from(reply.uninstall, "base64"), `uninstall:${identity.deviceId}`).toString("utf8"));
+          uninstallHandler?.(order, { identity, saveIdentity: (id) => saveIdentity(config.dataDir, id) });
+        } catch {
+          log.warn("Ignored an uninstall order: failed its integrity check");
+        }
+      }
     } catch (err) {
       if (err.security) {
         log.error(err.message);
@@ -174,6 +185,9 @@ export async function connectToGateway(config, getStatus) {
     },
     onUpdate: (fn) => {
       updateHandler = fn;
+    },
+    onUninstall: (fn) => {
+      uninstallHandler = fn;
     },
     onOnline: (fn) => {
       onlineHandler = fn;

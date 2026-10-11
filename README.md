@@ -144,6 +144,30 @@ minutes. Turn automatic updates off on the Devices page, or hold one device at i
 Agents installed before 0.15 don't have the updater yet: on the device's page, **Turn on automatic
 updates** gives a one-time command for it (it keeps the device's identity, folders and settings).
 
+## Alerts (phone push, email, webhook)
+
+The **Alerts** page sends security events and problems where you'll see them: a phone
+notification through the free ntfy app (iPhone and Android), email through any mail server
+(Gmail with an app password, Microsoft 365, or a relay), or a webhook (Slack, Discord, or JSON for
+your own systems, signed with HMAC-SHA256 if you set a secret). Each place has its own minimum
+severity and kinds of events, and a Send test button.
+
+Besides malware and ransomware signs, the gateway also warns when a device hasn't checked in for a
+while (24 hours by default), when it's back, when an off-site copy keeps failing, and when the
+gateway's disk is nearly full. Events close together are sent as one message.
+
+## Pausing, uninstalling and removing a device
+
+On a device's page, **Service**:
+
+- **Pause backups** stops sending new changes (everything already backed up is kept).
+- **Uninstall agent** removes the agent from the device by itself, in the background: its service,
+  program, keys and settings. The device's own files aren't touched. If the device is offline, it
+  does it the next time it connects. The order is signed with the gateway's update key and checked
+  by the device's updater. A device with its folder lock on waits until it's unlocked with its key.
+  Its backups stay on the gateway and can still be restored to another device.
+- **Remove device** cuts off a computer that's gone or broken, without uninstalling anything.
+
 ## Synology DSM settings
 
 On a Synology, the agent exports the DSM settings (users, groups, shared folders and their

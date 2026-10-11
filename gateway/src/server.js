@@ -138,7 +138,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -199,6 +199,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
     if (agentStatus) db.setAgentStatus(device.id, agentStatus);
     const reportedVersion = typeof info.agentVersion === "string" ? info.agentVersion.slice(0, 20) : null;
     updates?.report(device, device.agent_version, reportedVersion, agentStatus);
+    removals?.report(device, agentStatus);
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
 
     // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
@@ -219,10 +220,16 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
           sealed: seal(k.encKey, Buffer.from(JSON.stringify(b)), `browse:${device.id}:${b.id}`).toString("base64"),
         }))
       : [];
-    // A newer agent, if this device should take it now (also encrypted for this device only)
-    const offer = k ? updates?.offerFor(device, reportedVersion, agentStatus) : null;
+    // Uninstall this agent (asked for in the web UI), signed with the update key and encrypted
+    // for this device only. Otherwise a newer agent, if this device should take it now.
+    const removal = k ? removals?.orderFor({ ...device, agent_version: reportedVersion ?? device.agent_version }) : null;
+    const uninstall = removal ? seal(k.encKey, Buffer.from(JSON.stringify(removal)), `uninstall:${device.id}`).toString("base64") : null;
+    const offer = k && !removal ? updates?.offerFor(device, reportedVersion, agentStatus) : null;
     const update = offer ? seal(k.encKey, Buffer.from(JSON.stringify(offer)), `update:${device.id}`).toString("base64") : null;
-    return send(res, 200, { ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0, ...(update ? { update } : {}) });
+    return send(res, 200, {
+      ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0,
+      ...(update ? { update } : {}), ...(uninstall ? { uninstall } : {}),
+    });
   }
 
   // Live link: held open until there's work for this device, or WAIT_MS passes

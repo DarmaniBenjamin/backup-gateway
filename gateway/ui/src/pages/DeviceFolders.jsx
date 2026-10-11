@@ -18,6 +18,7 @@ import DeviceSettings from "../components/DeviceSettings.jsx";
 import FolderLock from "../components/FolderLock.jsx";
 import DeviceCopies from "../components/DeviceCopies.jsx";
 import { DeviceAgent } from "../components/AgentUpdates.jsx";
+import DeviceService from "../components/DeviceService.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const STATE = {
@@ -420,6 +421,8 @@ export default function DeviceFolders() {
           {readdError && <p className="mt-2 text-sm text-alert">{readdError}</p>}
         </section>
       )}
+
+      <DeviceService deviceId={device.id} deviceName={device.name} onChanged={reload} />
 
       <section>
         <h2 className="flex items-center gap-2 font-medium">

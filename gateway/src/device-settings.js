@@ -89,6 +89,11 @@ export function cleanAgentStatus(s) {
             at: text(s.update.at),
           }
         : null,
+    // Uninstalling (asked for in the web UI): accepted, refused (folder lock on) or failed
+    uninstall:
+      s.uninstall && typeof s.uninstall === "object" && ["uninstalling", "refused", "failed"].includes(s.uninstall.state)
+        ? { order: text(s.uninstall.order), state: s.uninstall.state, error: text(s.uninstall.error), at: text(s.uninstall.at) }
+        : null,
     // Folder lock, as the device reports it (the device enforces it, not the gateway)
     lock:
       s.lock && typeof s.lock === "object"

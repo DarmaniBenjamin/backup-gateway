@@ -10,6 +10,7 @@ export const pages = {
   Audit: () => import("./pages/Audit.jsx"),
   Offsite: () => import("./pages/Offsite.jsx"),
   Security: () => import("./pages/Security.jsx"),
+  Alerts: () => import("./pages/Alerts.jsx"),
 };
 
 // Fetch them all quietly once the browser is idle

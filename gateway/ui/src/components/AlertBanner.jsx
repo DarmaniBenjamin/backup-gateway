@@ -32,7 +32,7 @@ export default function AlertBanner({ alerts, onChange }) {
     <div className="mb-6 space-y-2" role="region" aria-label="Alerts">
       {open.slice(0, SHOW).map((a) => {
         const Icon = a.kind === "frozen" ? Snowflake : a.kind === "cloud" ? CloudOff : ShieldAlert;
-        const link = a.kind === "cloud" ? "/offsite" : "/quarantine";
+        const link = { cloud: "/offsite", notify: "/alerts", update: `/devices/${a.deviceId}`, uninstall: `/devices/${a.deviceId}` }[a.kind] ?? "/quarantine";
         return (
           <div key={a.id} className="flex items-start gap-3 rounded-lg border border-alert/40 bg-alert/10 py-3 pl-4 pr-2">
             <Icon size={18} className="mt-0.5 shrink-0 text-alert" aria-hidden="true" />

@@ -37,6 +37,8 @@
 //   POST /admin/api/cloud/pause                { paused }
 //   POST /admin/api/cloud/sync                 check everything and upload now
 //   POST /admin/api/cloud/disconnect           { bucket } stop sending (nothing in the bucket is touched)
+//   Security page: security-api.js. Agent updates: updates-api.js. Alerts page: notify-api.js.
+//   Pause, uninstall or remove a device: service-api.js.
 
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
@@ -55,6 +57,8 @@ import { startSignIn, finishSignIn, explainDrive, createDrive } from "../cloud/g
 import { cleanDestinations } from "../cloud/routing.js";
 import { securityRoutes } from "./security-api.js";
 import { updatesRoutes } from "./updates-api.js";
+import { notifyRoutes } from "./notify-api.js";
+import { serviceRoutes } from "./service-api.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
 
@@ -87,7 +91,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals }) {
   const listingCache = new Map(); // folder listings, see GET /devices/:id/files
   function publicDevice(d, stats, storageRows = db.storageStats()) {
     const s = stats?.find((x) => x.device_id === d.id);
@@ -1036,6 +1040,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
 
   if (security) Object.assign(routes, securityRoutes({ db, security, scanner, broker, ApiError }));
   if (updates) Object.assign(routes, updatesRoutes({ db, store, updates, installs, broker, ApiError, getDeviceOr404, log }));
+  if (notify) Object.assign(routes, notifyRoutes({ notify, health, store, ApiError }));
+  if (removals) Object.assign(routes, serviceRoutes({ db, store, removals, health, broker, ApiError, getDeviceOr404, requireMultiFolder, agentStatusOf, log }));
 
   // Turn "GET /devices/:id/files" patterns into matchers
   const compiled = Object.entries(routes).map(([key, handler]) => {

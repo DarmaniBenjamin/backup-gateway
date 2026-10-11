@@ -1,11 +1,11 @@
-// Device status: online (teal), offline / frozen (coral), never seen / revoked (grey).
+// Device status: online (teal), offline / frozen (coral), never seen / removed (grey).
 
 const STYLES = {
   online: { label: "Online", dot: "bg-good", text: "text-good" },
   offline: { label: "Offline", dot: "bg-alert", text: "text-alert" },
   frozen: { label: "Frozen", dot: "bg-alert", text: "text-alert" },
   "never-seen": { label: "Never connected", dot: "bg-dim", text: "text-dim" },
-  revoked: { label: "Revoked", dot: "bg-dim", text: "text-dim" },
+  revoked: { label: "Removed", dot: "bg-dim", text: "text-dim" },
 };
 
 export default function StatusBadge({ status }) {

@@ -53,6 +53,15 @@ const KIND_LABEL = {
   "agent.update-offered": "Agent update",
   "agent.updated": "Agent update",
   "agent.update-failed": "Agent update",
+  "agent.uninstall-requested": "Uninstall",
+  "agent.uninstalled": "Uninstall",
+  "agent.uninstall-failed": "Uninstall",
+  "agent.removed": "Removed",
+  "device.offline": "Offline",
+  "device.online": "Back online",
+  "offsite.failing": "Off-site",
+  "gateway.disk-low": "Disk space",
+  "gateway.disk-ok": "Disk space",
 };
 const LEVEL = {
   critical: { label: "Critical", cls: "border-sev-critical/50 bg-sev-critical/10 text-sev-critical" },
@@ -408,12 +417,14 @@ function EventFeed({ devices, device, setDevice, onOpen }) {
             <option value="">All types</option>
             <option value="malware">Malware</option>
             <option value="ransomware">Ransomware signs</option>
-            <option value="device">Frozen / unfrozen</option>
+            <option value="device">Frozen, offline, back online</option>
+            <option value="offsite">Off-site copies</option>
+            <option value="gateway">Gateway disk space</option>
             <option value="quarantine">Quarantine decisions</option>
             <option value="engine">Antivirus engine</option>
             <option value="scan">Scans</option>
             <option value="admin">Logins</option>
-            <option value="agent">Agent updates</option>
+            <option value="agent">Agent updates and uninstalls</option>
           </select>
           <select aria-label="Device" className={`${filterInput} max-w-44`} value={device} onChange={(e) => setDevice(e.target.value)}>
             <option value="">All devices</option>

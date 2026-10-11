@@ -17,6 +17,7 @@ const NAV = [
   { to: "/devices", label: "Devices" },
   { to: "/restore", label: "Restore" },
   { to: "/security", label: "Security" },
+  { to: "/alerts", label: "Alerts" },
   { to: "/quarantine", label: "Quarantine" },
   { to: "/offsite", label: "Off-site" },
   { to: "/jobs", label: "Jobs" },

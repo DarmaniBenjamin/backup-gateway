@@ -35,7 +35,7 @@ const PACK_MAX_CHUNKS = 4096;
 
 export class CopyError extends Error {}
 
-export function createCopies({ db, dataDir, storage }) {
+export function createCopies({ db, dataDir, storage, security = null }) {
   const conn = new DatabaseSync(path.join(dataDir, "gateway.db"));
   conn.exec(`
     PRAGMA busy_timeout = 5000;
@@ -402,7 +402,9 @@ export function createCopies({ db, dataDir, storage }) {
 
   function raise(d, message) {
     const text = `Off-site copy ${label(d)}: ${message}`;
-    if (!q.openAlert.get(`Off-site copy ${label(d)}:%`)) db.addAlert(d.device_id, "cloud", text);
+    if (q.openAlert.get(`Off-site copy ${label(d)}:%`)) return;
+    db.addAlert(d.device_id, "cloud", text);
+    security?.event("high", "offsite.failing", text, { deviceId: d.device_id, detail: { copy: label(d), error: message } });
   }
 
   // ---- One pass of one copy -------------------------------------------------------------------

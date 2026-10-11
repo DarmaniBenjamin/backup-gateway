@@ -21,6 +21,11 @@
 //   5. writes result.json for the agent to report to the gateway
 // Nothing in the agent's own folder is trusted without these checks: on Linux, the agent's
 // account can write there, but it can't make the gateway's signature.
+//
+// It also uninstalls the agent when the web UI asks: request.json with action "uninstall" and an
+// order the gateway signed with the same key, naming this device (from identity.json) and less
+// than a day old. It removes the service, program, identity, keys and settings, and itself. The
+// files that were backed up on this device are never touched.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -171,6 +176,91 @@ function unpack(pkg, kind, into) {
   return n;
 }
 
+// ---- Uninstalling ----------------------------------------------------------------------------
+
+function checkOrder(request) {
+  const key = crypto.createPublicKey(fs.readFileSync(path.join(here, "update-key.pem")));
+  const text = String(request.order ?? "");
+  if (!crypto.verify(null, Buffer.from(text), key, Buffer.from(String(request.signature ?? ""), "base64"))) {
+    throw new Error("the uninstall order isn't signed by this gateway's update key");
+  }
+  const order = JSON.parse(text);
+  if (order.format !== "backup-agent-uninstall") throw new Error("not an uninstall order");
+  const identity = readJson(path.join(conf.dataDir, "identity.json"));
+  if (!identity?.deviceId || identity.deviceId !== order.deviceId) throw new Error("the uninstall order is for another device");
+  if (!(Math.abs(Date.now() - Date.parse(order.issuedAt)) < 24 * 3600_000)) throw new Error("the uninstall order is too old");
+  return order;
+}
+
+function uninstallUnix() {
+  const svc = conf.service;
+  const linux = conf.platform === "linux";
+  // Only ever the folders the installers use
+  if (!/^[\w.-]+$/.test(svc)) throw new Error(`unexpected service name ${svc}`);
+  if (linux && (conf.prefix !== "/opt/backup-agent" || conf.dataDir !== "/var/lib/backup-agent")) throw new Error("unexpected install folders");
+  if (!linux && (!/^\/volume\d+\/@backup-agent$/.test(conf.prefix) || conf.dataDir !== `${conf.prefix}/data`)) throw new Error("unexpected install folders");
+  const units = [`${svc}.service`, `${svc}-update.service`, `${svc}-update.path`].map((u) => `/etc/systemd/system/${u}`);
+  run("systemctl", ["disable", "--now", `${svc}-update.path`], { ignore: true }); // this updater keeps running
+  run("systemctl", ["disable", "--now", svc], { ignore: true });
+  for (const f of [...units, ...(linux ? ["/etc/sysctl.d/90-backup-agent.conf"] : [])]) fs.rmSync(f, { force: true });
+  run("systemctl", ["daemon-reload"], { ignore: true });
+  if (linux) {
+    fs.rmSync(conf.dataDir, { recursive: true, force: true });
+    fs.rmSync("/etc/backup-agent", { recursive: true, force: true });
+    run("userdel", ["backup-agent"], { ignore: true });
+  }
+  fs.rmSync(conf.prefix, { recursive: true, force: true });
+}
+
+// Windows: the agent's tasks and folders are removed by a one-off SYSTEM task a few seconds
+// after this updater exits (its own node.exe is in the folder being removed)
+async function uninstallWindows() {
+  if (!/\\BackupAgent$/i.test(conf.prefix) || !/\\BackupAgent\\data$/i.test(conf.dataDir)) throw new Error("unexpected install folders");
+  if (!/^[\w.-]+$/.test(conf.service)) throw new Error(`unexpected task name ${conf.service}`);
+  const ps = (v) => `'${String(v).replace(/'/g, "''")}'`;
+  await stopAgent();
+  const script = path.join(here, "cleanup.ps1");
+  fs.writeFileSync(script, [
+    "# Removes the backup agent (written by its updater, as asked from the gateway's web UI)",
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "Start-Sleep -Seconds 5",
+    `foreach ($t in @(${ps(conf.service)}, ${ps(`${conf.service}Update`)})) { Stop-ScheduledTask -TaskName $t; Unregister-ScheduledTask -TaskName $t -Confirm:$false }`,
+    `$prefix = ${ps(conf.prefix)}`,
+    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.ExecutablePath -like \"$prefix\\*\" } | ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }",
+    "Start-Sleep -Seconds 2",
+    "Remove-Item -LiteralPath $prefix -Recurse -Force",
+    `Remove-Item -LiteralPath ${ps(path.dirname(conf.dataDir))} -Recurse -Force`,
+    "Unregister-ScheduledTask -TaskName 'BackupAgentCleanup' -Confirm:$false",
+    "",
+  ].join("\r\n"));
+  const register = [
+    `$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + ${ps(script)} + '"')`,
+    "$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
+    "Register-ScheduledTask -TaskName 'BackupAgentCleanup' -Action $a -Principal $p -Force | Out-Null",
+    "Start-ScheduledTask -TaskName 'BackupAgentCleanup'",
+  ].join("; ");
+  run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(register, "utf16le").toString("base64")]);
+}
+
+async function uninstall(request) {
+  let order = null;
+  try {
+    order = checkOrder(request);
+    log(`Uninstalling the agent, as asked by ${order.by ?? "the gateway"} (order signature checked)`);
+    if (win) await uninstallWindows();
+    else uninstallUnix();
+    console.log("The backup agent was uninstalled.");
+  } catch (err) {
+    log(`Uninstall failed: ${err.message}`);
+    try {
+      writeResult({ ok: false, action: "uninstall", order: order?.id ?? null, error: err.message });
+      fs.rmSync(path.join(updDir, "request.json"), { force: true });
+    } catch {
+      // nothing more to do
+    }
+  }
+}
+
 // ---- Main ------------------------------------------------------------------------------------
 
 async function main() {
@@ -180,6 +270,7 @@ async function main() {
   const reqPath = path.join(updDir, "request.json");
   const request = readJson(reqPath);
   if (!request) return; // nothing to do (the path unit can fire twice)
+  if (request.action === "uninstall") return uninstall(request);
 
   // One update at a time
   const lock = path.join(here, "update.lock");
