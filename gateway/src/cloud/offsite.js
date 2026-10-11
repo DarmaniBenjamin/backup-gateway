@@ -38,7 +38,7 @@ export const PROVIDERS = {
 export class CloudError extends Error {}
 
 // Plain-language versions of what the storage service says
-function explain(err) {
+function explain(err, stepName = "") {
   if (!(err instanceof S3Error)) {
     const m = err.cause?.code || err.code || err.message;
     if (/ENOTFOUND|EAI_AGAIN/.test(m)) return "Can't find that storage address. Check the endpoint, and that this computer is online.";
@@ -52,7 +52,13 @@ function explain(err) {
     case "AuthorizationHeaderMalformed":
       return "The key ID or application key is wrong (or the region doesn't match the endpoint).";
     case "AccessDenied":
-      return "The key isn't allowed to do this. It needs: list files, read files, write files, read and write file retentions (on this bucket).";
+      if (/locked test file|Extending/.test(stepName)) {
+        return "the key isn't allowed to set locks. In Backblaze, make a new application key for this bucket with \"Read and Write\" access (keys made before the bucket had Object Lock, or with \"Write Only\", can't set locks).";
+      }
+      return `the key isn't allowed to do this (${err.message}). Make sure it's for this bucket and has "Read and Write" access.`;
+    case "InvalidRequest":
+      if (/lock/i.test(err.message)) return "Object Lock isn't turned on for this bucket.";
+      return `${err.message} (${err.code})`;
     case "NoSuchBucket":
       return "That bucket doesn't exist at this endpoint.";
     case "RequestTimeTooSkewed":
@@ -65,12 +71,14 @@ function explain(err) {
 export function cleanCloudSettings(body) {
   const provider = String(body.provider ?? "");
   if (!PROVIDERS[provider]) throw new CloudError("Pick a storage provider.");
-  const endpoint = String(body.endpoint ?? "").trim().replace(/\/+$/, "");
+  // Backblaze shows the endpoint without https:// ("s3.us-west-004.backblazeb2.com"), so add it
+  let endpoint = String(body.endpoint ?? "").trim().replace(/\/+$/, "");
+  if (endpoint && !/^[a-z]+:\/\//i.test(endpoint)) endpoint = `https://${endpoint}`;
   let url;
   try {
     url = new URL(endpoint);
   } catch {
-    throw new CloudError("The endpoint must be a full address, like https://s3.us-west-004.backblazeb2.com");
+    throw new CloudError("That isn't a valid endpoint. It looks like s3.us-west-004.backblazeb2.com");
   }
   if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname))) {
     throw new CloudError("The endpoint must start with https://");
@@ -91,24 +99,42 @@ export function cleanCloudSettings(body) {
   return { provider, endpoint, region, bucket, keyId, secret, lockMode, retentionDays };
 }
 
-// Proves the settings work before anything is saved: right key, bucket has Object Lock on,
-// and the key can upload a locked file (a tiny test file, locked for one day).
-export async function testCloud(settings) {
-  const s3 = createS3({ endpoint: settings.endpoint, region: settings.region, bucket: settings.bucket, accessKeyId: settings.keyId, secretAccessKey: settings.secret, timeoutMs: 20_000 });
+// Proves the settings work before anything is saved, one step at a time so a failure says
+// exactly which permission is missing:
+//   1. check Object Lock is on for the bucket (needs: read bucket retentions; skipped if not allowed)
+//   2. upload a tiny test file with a one-day lock (needs: write files + write file retentions)
+//   3. extend that lock a little, as the gateway does for backups still in use (write file retentions)
+//   4. list the bucket (list files)
+async function step(name, fn) {
   try {
-    if (!(await s3.objectLockEnabled())) {
-      throw new CloudError("Object Lock isn't turned on for this bucket. Turn it on in the bucket's settings (or make a new bucket with it on), then try again.");
-    }
-    const key = `gateway-check/${new Date().toISOString()}-${crypto.randomBytes(4).toString("hex")}.txt`;
-    const body = Buffer.from("Connection test from the backup gateway. Safe to ignore; it unlocks after a day.\n");
-    await s3.putObject(key, body, { lockMode: settings.lockMode, lockUntil: new Date(Date.now() + DAY), contentType: "text/plain" });
-    const head = await s3.headObject(key);
-    if (!head.lockUntil) throw new CloudError("The test file uploaded but didn't get a lock. Check that Object Lock is on for this bucket.");
-    return { ok: true };
+    return await fn();
   } catch (err) {
     if (err instanceof CloudError) throw err;
-    throw new CloudError(explain(err));
+    throw new CloudError(`${name}: ${explain(err, name)}`);
   }
+}
+
+export async function testCloud(settings) {
+  const s3 = createS3({ endpoint: settings.endpoint, region: settings.region, bucket: settings.bucket, accessKeyId: settings.keyId, secretAccessKey: settings.secret, timeoutMs: 20_000 });
+  const lockEnabled = await step("Checking Object Lock on the bucket", async () => {
+    try {
+      return await s3.objectLockEnabled();
+    } catch (err) {
+      if (err instanceof S3Error && err.code === "AccessDenied") return null; // can't tell; the locked upload below will show it
+      throw err;
+    }
+  });
+  if (lockEnabled === false) {
+    throw new CloudError("Object Lock isn't turned on for this bucket. Turn it on in the bucket's settings (or make a new bucket with it on), then try again.");
+  }
+  const key = `gateway-check/${new Date().toISOString()}-${crypto.randomBytes(4).toString("hex")}.txt`;
+  const body = Buffer.from("Connection test from the backup gateway. Safe to ignore; it unlocks after a day.\n");
+  await step("Uploading a locked test file", () =>
+    s3.putObject(key, body, { lockMode: settings.lockMode, lockUntil: new Date(Date.now() + DAY), contentType: "text/plain" })
+  );
+  await step("Extending a lock", () => s3.extendLock(key, settings.lockMode, new Date(Date.now() + DAY + 3600_000)));
+  await step("Listing the bucket", () => s3.list("gateway-check/"));
+  return { ok: true };
 }
 
 const chunkKey = (deviceId, chunkId) => `chunks/${deviceId}/${chunkId.slice(0, 2)}/${chunkId}`;

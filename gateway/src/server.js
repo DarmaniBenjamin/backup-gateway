@@ -495,14 +495,30 @@ export function createServer({ db, keys, storage, guard, broker, installs }) {
       }
 
       // One-line installs: the link's secret token is the only key (see installs.js)
-      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/(linux)\.sh$/))) {
-        const script = installs?.script(match[1], match[2], ip);
-        // (sent as a normal reply so curl passes the message on to bash instead of failing silently)
-        if (!script) return sendText(res, 200, "echo 'This install link has expired or was already used. Create a new one in the web UI (Devices → Add device).' >&2; exit 1\n");
-        return sendText(res, 200, script);
-      }
-      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/agent\.tar\.gz$/))) {
-        const pkg = installs?.package(match[1]);
+      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/(linux\.sh|windows\.ps1|agent\.tar\.gz|agent\.zip|BackupAgentSetup\.exe)$/))) {
+        const [, token, file] = match;
+        if (file === "linux.sh" || file === "windows.ps1") {
+          const platform = file === "linux.sh" ? "linux" : "windows";
+          const script = installs?.script(token, platform, ip);
+          // (a dead link still gets a normal reply, so the message reaches the terminal instead of failing silently)
+          if (!script) {
+            const msg = "This install link has expired or was already used. Create a new one in the web UI (Devices > Add device).";
+            return sendText(res, 200, platform === "linux" ? `echo '${msg}' >&2; exit 1\n` : `Write-Host '${msg}' -ForegroundColor Red\n`);
+          }
+          return sendText(res, 200, script);
+        }
+        if (file === "BackupAgentSetup.exe") {
+          const exe = installs?.setupExe(token);
+          if (!exe) return send(res, 404, { error: "This install link has expired or was already used." });
+          res.writeHead(200, {
+            "Content-Type": "application/vnd.microsoft.portable-executable",
+            "Content-Length": exe.length,
+            "Content-Disposition": 'attachment; filename="BackupAgentSetup.exe"',
+            "Cache-Control": "no-store",
+          });
+          return res.end(exe);
+        }
+        const pkg = installs?.package(token, file === "agent.zip" ? "zip" : "tar");
         if (!pkg) return send(res, 404, { error: "Not found" });
         return sendBinary(res, 200, pkg);
       }

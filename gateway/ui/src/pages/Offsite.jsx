@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import {
-  Check, Cloud, CloudOff, Copy, Download, KeyRound, LoaderCircle, Lock, Pause, Play, RefreshCw, ShieldCheck, TriangleAlert,
+  Check, Cloud, CloudOff, Copy, Download, KeyRound, LoaderCircle, Lock, Pause, Play, RefreshCw, ShieldCheck,
 } from "lucide-react";
 import { api } from "../api.js";
 import { usePolling } from "../usePolling.js";
@@ -14,7 +14,7 @@ import Modal from "../components/Modal.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const PROVIDERS = [
-  { id: "b2", label: "Backblaze B2", note: "Recommended", endpoint: "https://s3.us-west-004.backblazeb2.com" },
+  { id: "b2", label: "Backblaze B2", note: "Recommended", endpoint: "s3.us-west-004.backblazeb2.com" },
   { id: "wasabi", label: "Wasabi", note: "S3-compatible", endpoint: "https://s3.us-east-1.wasabisys.com" },
   { id: "aws", label: "Amazon S3", note: "S3-compatible", endpoint: "https://s3.us-east-1.amazonaws.com" },
   { id: "s3", label: "Other S3-compatible", note: "With Object Lock", endpoint: "https://storage.example.com" },
@@ -43,7 +43,7 @@ function B2Steps() {
       </li>
       <li>
         Copy the bucket&rsquo;s <span className="text-fg">Endpoint</span>, e.g. <span className="font-mono text-fg">s3.us-west-004.backblazeb2.com</span>,
-        and put <span className="font-mono text-fg">https://</span> in front of it below.
+        into the Endpoint box.
       </li>
       <li>
         <span className="text-fg">Application Keys → Add a New Application Key</span>: allow access to{" "}
@@ -125,7 +125,7 @@ function SetupForm({ onConnected }) {
           </div>
         </fieldset>
 
-        <Field id="endpoint" label="Endpoint" hint={provider === "b2" ? "Shown on the bucket's page in Backblaze, with https:// in front." : "The S3 endpoint address for the bucket's region."}>
+        <Field id="endpoint" label="Endpoint" hint={provider === "b2" ? "Shown on the bucket's page in Backblaze, e.g. s3.us-west-004.backblazeb2.com" : "The S3 endpoint address for the bucket's region."}>
           <input id="endpoint" className={`${inputClass} font-mono`} placeholder={p.endpoint} spellCheck={false} autoComplete="off" value={form.endpoint} onChange={set("endpoint")} />
         </Field>
         <Field id="bucket" label="Bucket name">

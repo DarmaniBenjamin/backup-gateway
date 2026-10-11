@@ -46,7 +46,8 @@ if (!a.endpoint || !a.bucket || !a["key-id"] || !a.to) {
   console.log(`Usage: npm run recover -- --endpoint URL --bucket NAME --key-id ID --to FOLDER [--region R] [--catalog KEY]`);
   process.exit(1);
 }
-const endpoint = a.endpoint.replace(/\/+$/, "");
+let endpoint = String(a.endpoint).trim().replace(/\/+$/, "");
+if (!/^[a-z]+:\/\//i.test(endpoint)) endpoint = `https://${endpoint}`; // Backblaze shows it without https://
 const region =
   a.region ||
   Object.values(PROVIDERS).map((p) => p.regionFrom && endpoint.match(p.regionFrom)?.[1]).find(Boolean) ||

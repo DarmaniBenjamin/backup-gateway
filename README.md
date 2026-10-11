@@ -29,10 +29,18 @@ It downloads the agent from the gateway, checks its SHA-256, installs it as a ba
 connects — no code or settings to type. The command works once and expires with its enrollment code.
 For devices on other computers, set `GATEWAY_HOST=0.0.0.0` and `GATEWAY_PUBLIC_URL` in the gateway's `.env`.
 
+**Windows PCs and servers** get three choices in the same window: a setup program to download and
+double-click (`BackupAgentSetup.exe`, build it once with `npm run build-windows-setup` in `gateway/`,
+needs Go), or one command for PowerShell or Command Prompt run as Administrator. All three do the same:
+the agent goes to `C:\Program Files\BackupAgent`, its settings and keys to `C:\ProgramData\BackupAgent`
+(SYSTEM and Administrators only), and it runs as a background task that starts with Windows. To remove
+it: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\BackupAgent\uninstall.ps1"` (add
+`-Purge` to also delete the device's identity).
+
 On Linux the agent runs as a service (`backup-agent`) under its own user, not root. It can read any
 file so it can back it up, but can only write inside the allowed folders (for restores), and the rest
 of the system is read-only to it. To remove it: `sudo /opt/backup-agent/uninstall.sh` (add `--purge`
-to also delete the device's identity). Windows, Mac and Synology installers are coming.
+to also delete the device's identity). Mac and Synology installers are coming.
 
 ## Off-site copy (Backblaze B2 and other S3 storage)
 

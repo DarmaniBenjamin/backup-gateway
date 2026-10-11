@@ -34,3 +34,6 @@ logs/
 Thumbs.db
 .vscode/
 .idea/
+
+# Built Windows setup program (npm run build-windows-setup)
+gateway/bin/

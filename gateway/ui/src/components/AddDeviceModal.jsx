@@ -4,7 +4,7 @@
 // The command (and the one-time enrollment code inside it) is shown once and works once.
 
 import { useState } from "react";
-import { Check, Copy, HardDrive, KeyRound, Laptop, LoaderCircle, Monitor, Server, TriangleAlert } from "lucide-react";
+import { Check, Copy, Download, HardDrive, KeyRound, Laptop, LoaderCircle, Monitor, Server, TriangleAlert } from "lucide-react";
 import { api } from "../api.js";
 import { formatDateTime } from "../format.js";
 import Modal from "./Modal.jsx";
@@ -12,11 +12,17 @@ import { inputClass, primaryButton, secondaryButton } from "./buttons.js";
 
 const PLATFORMS = [
   { id: "linux", label: "Linux PC or server", note: "Ubuntu, Debian, Fedora, Arch… with systemd", icon: Server },
-  { id: "windows", label: "Windows PC", note: "Coming soon", icon: Monitor, soon: true },
+  { id: "windows", label: "Windows PC or server", note: "Windows 10/11, Server 2016+", icon: Monitor },
   { id: "mac", label: "Mac", note: "Coming soon", icon: Laptop, soon: true },
   { id: "synology", label: "Synology NAS", note: "Coming soon", icon: HardDrive, soon: true },
   { id: "manual", label: "Just the code", note: "Set the agent up by hand", icon: KeyRound },
 ];
+
+// Folder examples for each kind of device
+const EXAMPLES = {
+  linux: { allowed: "/home", allowedMany: "/home;/srv/shared", watch: "/home/anna/Documents" },
+  windows: { allowed: "C:\\Users", allowedMany: "C:\\Users;D:\\Shared", watch: "C:\\Users\\Anna\\Documents" },
+};
 
 function CopyBox({ id, text, label, large = false }) {
   const [copied, setCopied] = useState(false);
@@ -82,13 +88,40 @@ function Result({ result, onClose }) {
 
       {install ? (
         <>
-          <h3 className="mt-5 font-display text-sm font-semibold text-fg">Paste this in a terminal on the new device</h3>
-          <div className="mt-2">
-            <CopyBox id="install-command" text={install.command} label="Copy install command" />
-          </div>
+          {install.setupUrl && (
+            <>
+              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest: run the setup program on the new PC</h3>
+              <p className="mt-1 text-sm text-dim">
+                Open this link in a browser on the new PC (or download it here and copy it over on a USB stick), then
+                double-click <span className="font-mono text-fg">BackupAgentSetup.exe</span> and allow it to make changes.
+              </p>
+              <div className="mt-2">
+                <CopyBox id="setup-url" text={install.setupUrl} label="Copy download link" />
+              </div>
+              <a href={install.setupUrl} className={`${secondaryButton} mt-2`} download>
+                <Download size={16} aria-hidden="true" />
+                Download BackupAgentSetup.exe here
+              </a>
+              <p className="mt-2 text-xs text-dim">
+                Windows may say it &ldquo;protected your PC&rdquo; because the program isn&rsquo;t code-signed yet: click More info, then
+                Run anyway.
+              </p>
+            </>
+          )}
+          <h3 className="mt-5 font-display text-sm font-semibold text-fg">
+            {install.platform === "windows" ? (install.setupUrl ? "Or paste one command" : "Paste one command on the new PC") : "Paste this in a terminal on the new device"}
+          </h3>
+          {install.commands.map((c) => (
+            <div key={c.id} className="mt-2">
+              {install.commands.length > 1 && <p className="mb-1 text-xs text-dim">{c.label}</p>}
+              <CopyBox id={`cmd-${c.id}`} text={c.command} label={`Copy ${c.label} command`} />
+            </div>
+          ))}
           <p className="mt-3 text-sm text-dim">
-            It asks for the device&rsquo;s password (sudo), then downloads the agent from this gateway, checks it, installs it as a
-            background service that starts with the computer, and connects. The device shows up here within a minute.
+            {install.platform === "windows"
+              ? "Open PowerShell or Command Prompt as Administrator (right-click > Run as administrator) and paste. It downloads the agent from this gateway, checks it, installs it as a background task that starts with Windows, and connects."
+              : "It asks for the device\u2019s password (sudo), then downloads the agent from this gateway, checks it, installs it as a background service that starts with the computer, and connects."}{" "}
+            The device shows up here within a minute.
           </p>
           {install.localOnly && (
             <p className="mt-3 flex gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
@@ -128,7 +161,15 @@ function Result({ result, onClose }) {
 export default function AddDeviceModal({ clients, onClose }) {
   const [clientName, setClientName] = useState("");
   const [platform, setPlatform] = useState("linux");
-  const [allowed, setAllowed] = useState("/home");
+  const [allowed, setAllowed] = useState(EXAMPLES.linux.allowed);
+  const examples = EXAMPLES[platform];
+
+  // Switching between Linux and Windows swaps the example folders, unless they were changed
+  function choosePlatform(id) {
+    const defaults = Object.values(EXAMPLES).map((e) => e.allowed);
+    if (EXAMPLES[id] && defaults.includes(allowed)) setAllowed(EXAMPLES[id].allowed);
+    setPlatform(id);
+  }
   const [deviceName, setDeviceName] = useState("");
   const [watch, setWatch] = useState("");
   const [result, setResult] = useState(null);
@@ -211,7 +252,7 @@ export default function AddDeviceModal({ clients, onClose }) {
                     value={p.id}
                     checked={selected}
                     disabled={p.soon}
-                    onChange={() => setPlatform(p.id)}
+                    onChange={() => choosePlatform(p.id)}
                     className="sr-only"
                   />
                   <Icon size={20} className={selected ? "text-signal" : "text-dim"} aria-hidden="true" />
@@ -225,7 +266,7 @@ export default function AddDeviceModal({ clients, onClose }) {
           </div>
         </fieldset>
 
-        {platform === "linux" && (
+        {examples && (
           <>
             <Field
               id="allowed"
@@ -234,7 +275,7 @@ export default function AddDeviceModal({ clients, onClose }) {
                 <>
                   The only folders the gateway may ever back up or browse on this device, separated by{" "}
                   <span className="font-mono text-fg">;</span> — e.g.{" "}
-                  <span className="font-mono text-fg">/home;/srv/shared</span>. They&rsquo;re locked in on the device itself.
+                  <span className="font-mono text-fg">{examples.allowedMany}</span>. They&rsquo;re locked in on the device itself.
                 </>
               }
             >
@@ -263,7 +304,7 @@ export default function AddDeviceModal({ clients, onClose }) {
                   id="watch"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="e.g. /home/anna/Documents"
+                  placeholder={`e.g. ${examples.watch}`}
                   value={watch}
                   onChange={(e) => setWatch(e.target.value)}
                   className={`${inputClass} font-mono`}

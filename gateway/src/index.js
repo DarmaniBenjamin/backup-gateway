@@ -2,6 +2,7 @@
 //   1. Agent API  (GATEWAY_PORT, default 8080)       — agents connect here
 //   2. Admin UI   (GATEWAY_ADMIN_PORT, default 8090) — you log in here; keep it private
 
+import fs from "node:fs";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db.js";
 import { loadOrCreateGatewayKeys } from "./keys.js";
@@ -38,7 +39,9 @@ try {
   log.warn(`Could not pack the agent for one-line installs: ${err.message}`);
 }
 if (!agentPackage) log.warn(`Agent folder not found at ${config.agentDir}: one-line installs are off (set GATEWAY_AGENT_DIR)`);
-const installs = createInstalls({ config, store, agentPackage });
+const windowsSetup = fs.existsSync(config.windowsSetupPath) ? fs.readFileSync(config.windowsSetupPath) : null;
+if (!windowsSetup) log.info(`No Windows setup program at ${config.windowsSetupPath} (optional: npm run build-windows-setup)`);
+const installs = createInstalls({ config, store, agentPackage, windowsSetup });
 const server = createServer({ db, keys, storage, guard, broker, installs });
 const offsite = createOffsite({ db, dataDir: config.dataDir, storage });
 const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, offsite });

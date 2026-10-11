@@ -49,6 +49,12 @@ export function loadConfig() {
       process.env.GATEWAY_AGENT_DIR?.trim() || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "agent")
     ),
 
+    // The Windows setup program (built with "npm run build-windows-setup"). Optional: without it,
+    // Windows devices are added with the PowerShell or Command Prompt command.
+    windowsSetupPath: path.resolve(
+      process.env.GATEWAY_WINDOWS_SETUP?.trim() || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "BackupAgentSetup.exe")
+    ),
+
     dataDir,
     codeTtlMinutes: Number(process.env.GATEWAY_CODE_TTL_MINUTES || 60),
 
