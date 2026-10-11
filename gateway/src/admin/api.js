@@ -457,7 +457,10 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     "GET /devices/:id/folders"({ params }) {
       const d = getDeviceOr404(params.id);
       return {
-        device: { id: d.id, name: d.device_name, client: d.client_name, status: deviceStatus(d), live: broker.isLive(d.id) },
+        device: {
+          id: d.id, name: d.device_name, client: d.client_name, status: deviceStatus(d), live: broker.isLive(d.id),
+          agentVersion: d.agent_version,
+        },
         multiFolder: (d.path_layout ?? 1) >= 2,
         platform: d.platform,
         allowedPaths: d.allowed_paths ? JSON.parse(d.allowed_paths) : [],

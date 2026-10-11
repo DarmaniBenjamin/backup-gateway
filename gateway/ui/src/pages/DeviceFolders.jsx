@@ -1,10 +1,11 @@
-// One device: which folders it backs up. Add folders with the live folder browser, change what
-// each one skips, or stop backing one up (its backups are kept). Also its background behaviour
+// One device: which folders it backs up. Choose them in a live folder tree (tick to back up,
+// untick a sub-folder to skip it), set name rules for what each skips, or stop backing one up
+// (its backups are kept). Also its background behaviour
 // (speed limits, pauses, scan mode) and its allowed areas, which can only be changed on the device.
 
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeft, FolderPlus, History, ShieldCheck } from "lucide-react";
+import { ArrowLeft, FolderTree as FolderTreeIcon, History, ShieldCheck } from "lucide-react";
 import { api } from "../api.js";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
@@ -12,7 +13,7 @@ import PageHeader from "../components/PageHeader.jsx";
 import LoadState from "../components/LoadState.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
-import FolderPicker from "../components/FolderPicker.jsx";
+import FolderTree from "../components/FolderTree.jsx";
 import DeviceSettings from "../components/DeviceSettings.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
@@ -49,12 +50,12 @@ function FolderRow({ folder, onEdit, onRemove }) {
           {folder.state === "ok" && folder.files != null
             ? `${folder.files.toLocaleString()} file${folder.files === 1 ? "" : "s"}, ${formatSize(folder.bytes)}`
             : "No numbers yet"}
-          {folder.excludes.length > 0 && <> · skips {folder.excludes.join(", ")}</>}
+          {folder.excludes.length > 0 && <> · skips {folder.excludes.map((e) => (e.startsWith("/") ? e.slice(1) : e)).join(", ")}</>}
         </p>
       </div>
       <div className="flex gap-2">
         <button type="button" className={secondaryButton} onClick={() => onEdit(folder)}>
-          Exclusions
+          Skip rules
         </button>
         <button type="button" className={secondaryButton} onClick={() => onRemove(folder)}>
           Remove
@@ -100,8 +101,10 @@ function ExcludesDialog({ deviceId, folder, onClose, onDone }) {
     >
       <div className="space-y-3 text-sm">
         <p className="text-dim">
-          One file or folder name per line. Use * for &ldquo;anything&rdquo;: <span className="font-mono text-fg">*.mp4</span> skips
-          every MP4 file, <span className="font-mono text-fg">Cache</span> skips every folder called Cache.
+          One rule per line. Use * for &ldquo;anything&rdquo;: <span className="font-mono text-fg">*.mp4</span> skips every MP4
+          file, <span className="font-mono text-fg">Cache</span> skips every folder called Cache. A line starting with / skips one
+          exact sub-folder: <span className="font-mono text-fg">/Downloads</span> (that&rsquo;s what unticking a folder in the
+          tree does).
         </p>
         <textarea
           value={text}
@@ -224,8 +227,8 @@ export default function DeviceFolders() {
               title={canAdd ? undefined : "The device must be connected"}
               onClick={() => setPicking(true)}
             >
-              <FolderPlus size={16} aria-hidden="true" />
-              Add folder
+              <FolderTreeIcon size={16} aria-hidden="true" />
+              Choose folders
             </button>
           </div>
         }
@@ -244,7 +247,7 @@ export default function DeviceFolders() {
       {multiFolder && !device.live && (
         <p className="mb-6 rounded-lg border border-edge bg-surface px-4 py-3 text-sm text-dim">
           The device isn&rsquo;t connected right now. Folder changes are saved and applied when it reconnects; adding a folder
-          needs it connected, so you can browse its folders.
+          needs it connected, so you can see its folders.
         </p>
       )}
 
@@ -253,7 +256,15 @@ export default function DeviceFolders() {
         {active.length === 0 ? (
           <div className="rounded-lg border border-dashed border-edge px-6 py-10 text-center">
             <p className="font-medium">Nothing is being backed up on this device</p>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-dim">Add a folder to start. You can browse the device&rsquo;s folders live.</p>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-dim">
+              Click Choose folders and tick what to back up. The device shows you its folders live.
+            </p>
+            {canAdd && (
+              <button type="button" className={`${primaryButton} mt-5`} onClick={() => setPicking(true)}>
+                <FolderTreeIcon size={16} aria-hidden="true" />
+                Choose folders
+              </button>
+            )}
           </div>
         ) : (
           <ul className="divide-y divide-edge rounded-lg border border-edge bg-surface">
@@ -322,10 +333,11 @@ export default function DeviceFolders() {
       </section>
 
       {picking && (
-        <FolderPicker
-          device={device}
+        <FolderTree
+          device={{ ...device, platform: data.platform }}
+          folders={active}
           onClose={() => setPicking(false)}
-          onAdded={() => {
+          onSaved={() => {
             setPicking(false);
             reload();
           }}

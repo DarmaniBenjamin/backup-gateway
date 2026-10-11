@@ -17,6 +17,21 @@ function compilePattern(pattern) {
   return new RegExp(`^${re}$`, "i");
 }
 
+// "/Downloads" / "/Projects/Old" -> exactly that sub-folder of the backup folder (and everything in it).
+// Windows and Mac ignore upper/lower case in paths, so the match does too there.
+const PATHS_IGNORE_CASE = process.platform === "win32" || process.platform === "darwin";
+const comparable = (p) => (PATHS_IGNORE_CASE ? p.toLowerCase() : p);
+
+function splitExcludes(excludes) {
+  const names = [];
+  const paths = [];
+  for (const e of excludes ?? []) {
+    if (e.startsWith("/")) paths.push(comparable(e.slice(1)));
+    else names.push(compilePattern(e));
+  }
+  return { patterns: names, subPaths: paths };
+}
+
 export function createTracker(db, onChange) {
   let folders = []; // [{ id, name, path, excludes, patterns }]
 
@@ -47,8 +62,12 @@ export function createTracker(db, onChange) {
   function isExcluded(absPath) {
     if (isIgnored(absPath)) return true;
     const f = folderFor(absPath);
-    if (!f || f.patterns.length === 0) return false;
+    if (!f || (f.patterns.length === 0 && f.subPaths.length === 0)) return false;
     const parts = path.relative(f.path, absPath).split(path.sep).filter(Boolean);
+    if (f.subPaths.length) {
+      const rel = comparable(parts.join("/"));
+      if (f.subPaths.some((sp) => rel === sp || rel.startsWith(`${sp}/`))) return true;
+    }
     return parts.some((part) => f.patterns.some((re) => re.test(part)));
   }
 
@@ -142,7 +161,7 @@ export function createTracker(db, onChange) {
   return {
     // The folders to back up (already checked by the folder manager)
     setFolders(list) {
-      folders = list.map((f) => ({ ...f, patterns: (f.excludes ?? []).map(compilePattern) }));
+      folders = list.map((f) => ({ ...f, ...splitExcludes(f.excludes) }));
     },
     folders: () => folders,
     folderByName: (name) => folders.find((f) => f.name === name) ?? null,

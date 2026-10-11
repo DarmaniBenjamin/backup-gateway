@@ -57,14 +57,28 @@ export function isInsidePath(child, parent, platform) {
 
 export const samePath = (a, b, platform) => comparable(a, platform) === comparable(b, platform);
 
-// Exclusion patterns match file or folder NAMES: "*.mp4", "Cache", "~*", "Thumbs?.db"
+// Two kinds of exclusions:
+//   names:  "*.mp4", "Cache", "~*", "Thumbs?.db" — skip every file or folder with a matching name
+//   paths:  "/Downloads", "/Projects/Old" — skip exactly that sub-folder of the backup folder
+//           (what unticking a sub-folder in the folder tree makes). Always written with "/".
+export function isPathExclude(p) {
+  return p.startsWith("/");
+}
+
 export function cleanExcludes(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
   for (const raw of list) {
     const p = String(raw).trim();
     if (!p) continue;
-    if (p.length > 100 || /[\\/\0]/.test(p)) throw new Error(`"${p.slice(0, 40)}" isn't a valid pattern. Use names like *.mp4 or Cache, without slashes.`);
+    if (isPathExclude(p)) {
+      const parts = p.slice(1).split("/");
+      if (p.length > 400 || /[\\\0]/.test(p) || parts.some((x) => x === "" || x === "." || x === "..")) {
+        throw new Error(`"${p.slice(0, 40)}" isn't a valid sub-folder. Write it like /Downloads or /Projects/Old.`);
+      }
+    } else if (p.length > 100 || /[\\/\0]/.test(p)) {
+      throw new Error(`"${p.slice(0, 40)}" isn't a valid pattern. Use names like *.mp4 or Cache, or a sub-folder like /Downloads.`);
+    }
     if (!out.includes(p)) out.push(p);
   }
   if (out.length > MAX_EXCLUDES) throw new Error(`At most ${MAX_EXCLUDES} exclusion patterns per folder.`);
