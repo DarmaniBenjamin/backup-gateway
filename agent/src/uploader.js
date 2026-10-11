@@ -6,6 +6,8 @@
 //   3. Compress + encrypt (AES-256-GCM) only the missing chunks and upload them
 //   4. Send an encrypted manifest: "version N of this file = these chunks, this SHA-256"
 // The gateway rebuilds the file from its chunks and checks the SHA-256 before accepting it.
+// Uploads follow the device's background settings: paused on battery / metered connections /
+// by hand, and kept under the upload speed limit.
 
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
@@ -25,7 +27,7 @@ function formatSize(bytes) {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
-export function createUploader({ db, tracker, connection }) {
+export function createUploader({ db, tracker, connection, policy }) {
   const { client, auth } = connection;
   let running = false;
   let again = false;
@@ -75,6 +77,7 @@ export function createUploader({ db, tracker, connection }) {
       if (id !== ids[index]) throw new FileChangedError(); // file was edited while we were uploading it
       if (missing.has(id) && !uploaded.has(id)) {
         const box = seal(keys.encKey, data, `chunk:${id}`);
+        await policy.throttle(box.length);
         await client.signedPutBinary(`/api/chunks/${id}`, box, auth);
         uploaded.add(id);
         sentBytes += box.length;
@@ -149,11 +152,14 @@ export function createUploader({ db, tracker, connection }) {
     try {
       do {
         again = false;
-        if (db.countPending() === 0) break;
+        if (db.countPending() === 0 || policy.blockReason()) break;
         const keys = await connection.ensureKeys();
         let batch;
         while ((batch = db.nextPending(50)).length > 0) {
-          for (const change of batch) await processChange(change, keys);
+          for (const change of batch) {
+            if (policy.blockReason()) return; // paused mid-way: the rest is sent when it resumes
+            await processChange(change, keys);
+          }
         }
       } while (again);
     } catch (err) {

@@ -45,6 +45,11 @@ function DeviceRow({ d }) {
           <p className="mt-0.5 text-xs text-dim" title={formatDateTime(d.lastSeenAt)}>
             seen {timeAgo(d.lastSeenAt)}
           </p>
+          {d.pausedReason && d.status === "online" && (
+            <p className="mt-0.5 text-xs text-signal" title={`Backups paused: ${d.pausedReason}`}>
+              Paused
+            </p>
+          )}
         </div>
         <Field label="Last backup" title={formatDateTime(d.lastBackupAt)}>
           {d.lastBackupAt ? timeAgo(d.lastBackupAt) : "No backups yet"}

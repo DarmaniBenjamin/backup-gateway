@@ -26,6 +26,7 @@
 //   POST /admin/api/devices/:id/folders                     { path, excludes } start backing up a folder
 //   POST /admin/api/devices/:id/folders/:folderId/excludes  { excludes }
 //   POST /admin/api/devices/:id/folders/:folderId/remove    stop backing it up (backups are kept)
+//   POST /admin/api/devices/:id/settings                    background settings (speed limits, pauses...)
 
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
@@ -35,6 +36,7 @@ import { REASON_TEXT } from "../inspect.js";
 import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
 } from "../folders.js";
+import { SettingsError, cleanSettings, settingsOf } from "../device-settings.js";
 import { log } from "../logger.js";
 
 const ONLINE_WINDOW_MS = 90_000; // seen within 90 s (3 missed heartbeats) = online
@@ -85,6 +87,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker }) {
       platform: d.platform,
       multiFolder: (d.path_layout ?? 1) >= 2,
       live: broker.isLive(d.id),
+      pausedReason: d.agent_status ? JSON.parse(d.agent_status).paused : null,
       frozenAt: d.frozen_at,
       frozenReason: d.frozen_reason,
       online: !!d.last_seen_at && Date.now() - new Date(d.last_seen_at) < ONLINE_WINDOW_MS,
@@ -438,7 +441,28 @@ export function createAdminApi({ db, store, keys, storage, config, broker }) {
         platform: d.platform,
         allowedPaths: d.allowed_paths ? JSON.parse(d.allowed_paths) : [],
         folders: db.listFolders(d.id).map(publicFolder),
+        settings: settingsOf(d),
+        agentStatus: d.agent_status ? JSON.parse(d.agent_status) : null,
       };
+    },
+
+    // Background settings: priority, upload speed limits, work hours, pauses, scan mode
+    "POST /devices/:id/settings"({ params, body, admin, ip }) {
+      const d = getDeviceOr404(params.id);
+      requireMultiFolder(d);
+      let settings;
+      try {
+        settings = cleanSettings(body.settings);
+      } catch (err) {
+        if (err instanceof SettingsError) throw new ApiError(400, err.message);
+        throw err;
+      }
+      const before = settingsOf(d);
+      db.setDeviceSettings(d.id, settings);
+      const changed = Object.keys(settings).filter((k) => JSON.stringify(settings[k]) !== JSON.stringify(before[k]));
+      foldersChanged(d, admin, ip, "device.settings-changed", { changed });
+      log.info(`Admin "${admin.username}" changed background settings on ${d.device_name}: ${changed.join(", ") || "no changes"}`);
+      return { settings };
     },
 
     // Live folder browser: the agent lists the sub-folders of `path` (names only, no files).

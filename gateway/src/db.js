@@ -135,6 +135,10 @@ export function openDatabase(dataDir) {
     db.exec("ALTER TABLE devices ADD COLUMN allowed_paths TEXT");
     db.exec("ALTER TABLE devices ADD COLUMN platform TEXT");
   }
+  if (!deviceColumns.includes("settings")) {
+    db.exec("ALTER TABLE devices ADD COLUMN settings TEXT");     // background settings (JSON)
+    db.exec("ALTER TABLE devices ADD COLUMN agent_status TEXT"); // what the agent last reported (JSON)
+  }
   const versionColumns = db.prepare("PRAGMA table_info(file_versions)").all().map((c) => c.name);
   if (!versionColumns.includes("status")) {
     db.exec("ALTER TABLE file_versions ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'");
@@ -266,6 +270,8 @@ export function openDatabase(dataDir) {
     setAgentInfo: db.prepare("UPDATE devices SET allowed_paths = ?, platform = ? WHERE id = ?"),
     prefixPaths: db.prepare("UPDATE file_versions SET rel_path = ? || '/' || rel_path WHERE device_id = ?"),
     setLayout: db.prepare("UPDATE devices SET path_layout = ? WHERE id = ?"),
+    setSettings: db.prepare("UPDATE devices SET settings = ? WHERE id = ?"),
+    setAgentStatus: db.prepare("UPDATE devices SET agent_status = ? WHERE id = ?"),
     storageStats: db.prepare(`
       SELECT device_id, COUNT(*) AS chunks, SUM(plain_size) AS plain, SUM(box_size) AS stored
       FROM chunks GROUP BY device_id
@@ -373,6 +379,9 @@ export function openDatabase(dataDir) {
     bumpFoldersVersion: (deviceId) => q.bumpFolders.run(deviceId),
     setAgentInfo: (deviceId, { allowedPaths, platform }) =>
       q.setAgentInfo.run(JSON.stringify(allowedPaths ?? []), platform ?? null, deviceId),
+
+    setDeviceSettings: (deviceId, settings) => q.setSettings.run(JSON.stringify(settings), deviceId),
+    setAgentStatus: (deviceId, status) => q.setAgentStatus.run(status ? JSON.stringify(status) : null, deviceId),
 
     // One-time upgrade of a device to multi-folder paths: its existing backups all came from one
     // folder, so they move under that folder's name ("report.docx" -> "client-files/report.docx")

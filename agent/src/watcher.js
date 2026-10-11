@@ -5,7 +5,9 @@
 import chokidar from "chokidar";
 import { log } from "./logger.js";
 
-export function startWatcher(isExcluded, onHint) {
+// onLimit is called once if the operating system can't watch this many folders
+// (Linux / Synology "inotify" limit); the agent then switches to scheduled scans.
+export function startWatcher(isExcluded, onHint, onLimit) {
   const watched = new Set();
   const watcher = chokidar.watch([], {
     ignored: (p) => isExcluded(p),
@@ -21,7 +23,17 @@ export function startWatcher(isExcluded, onHint) {
   for (const event of ["add", "change", "unlink", "addDir", "unlinkDir"]) {
     watcher.on(event, (p) => onHint(p));
   }
-  watcher.on("error", (err) => log.error("Watcher error", err));
+  let limitHit = false;
+  watcher.on("error", (err) => {
+    if (err?.code === "ENOSPC" || err?.code === "EMFILE") {
+      if (!limitHit) {
+        limitHit = true;
+        onLimit?.(err);
+      }
+      return;
+    }
+    log.error("Watcher error", err);
+  });
 
   return {
     // Watch exactly these folders

@@ -6,6 +6,9 @@
 // - The last folder list received is kept in the local database, so backups keep running offline.
 // - Removing a folder makes the agent forget its files WITHOUT reporting them as deleted, so
 //   the gateway keeps every backup of them.
+// - The gateway also sends the device's background settings (see policy.js). Change detection is
+//   "live" (the operating system reports changes instantly) or "scheduled" (a full scan every
+//   N minutes: much lighter for huge NAS shares with hundreds of thousands of files).
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -28,12 +31,42 @@ function folderNameFromPath(p) {
   return (last || "Root").slice(0, 64);
 }
 
-export function createFolderManager({ config, db, tracker, watcher, enqueue }) {
+export function createFolderManager({ config, db, tracker, watcher, enqueue, policy }) {
   let states = new Map(); // folder name -> { state, error }
   let connection = null;
   let synced = false;
   let syncing = null;
   const onFirstSync = [];
+  let scanTimer = null;
+  let watchLimitHit = false; // the OS couldn't watch everything, so scheduled scans are used
+  let lastScanAt = null;
+
+  const scheduled = () => watchLimitHit || policy.get().scanMode === "scheduled";
+
+  function scanAll() {
+    enqueue(async () => {
+      const started = Date.now();
+      await tracker.fullScan();
+      lastScanAt = new Date().toISOString();
+      log.info(`Full scan done in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      connection?.heartbeatNow();
+    });
+  }
+
+  // Live watching, or a full scan every N minutes
+  function applyScanMode() {
+    clearInterval(scanTimer);
+    scanTimer = null;
+    const paths = tracker.folders().map((f) => f.path);
+    if (scheduled()) {
+      watcher.setPaths([]);
+      const minutes = watchLimitHit && policy.get().scanMode === "live" ? 15 : policy.get().scanIntervalMinutes;
+      scanTimer = setInterval(scanAll, minutes * 60_000);
+      scanTimer.unref();
+    } else {
+      watcher.setPaths(paths);
+    }
+  }
 
   // Is this folder allowed and usable on this device? Returns { state, error }.
   async function check(folder, accepted) {
@@ -70,7 +103,7 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue }) {
     }
     states = next;
     tracker.setFolders(accepted);
-    watcher.setPaths(accepted.map((f) => f.path));
+    applyScanMode();
 
     for (const f of accepted) {
       if (before.has(`${f.name}\n${f.path}`)) continue;
@@ -149,8 +182,18 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue }) {
     if (legacyFolder) db.deleteSetting("legacyFolder"); // the gateway has it now
 
     if (db.getSetting("foldersVersion") !== wanted.version || !synced) {
+      if (wanted.settings) {
+        const modeBefore = JSON.stringify([policy.get().scanMode, policy.get().scanIntervalMinutes]);
+        db.setSetting("deviceSettings", wanted.settings);
+        policy.apply(wanted.settings);
+        if (modeBefore !== JSON.stringify([policy.get().scanMode, policy.get().scanIntervalMinutes])) {
+          applyScanMode();
+          if (!scheduled()) scanAll(); // catch anything that changed while scans were scheduled
+        }
+      }
       await applyWanted(wanted.folders);
       db.setSetting("foldersVersion", wanted.version);
+      if (synced) connection.heartbeatNow(); // report the new state to the web UI straight away
     }
     if (!synced) {
       synced = true;
@@ -175,8 +218,27 @@ export function createFolderManager({ config, db, tracker, watcher, enqueue }) {
       } else if (config.watchDir && !db.listFolders().some((f) => f.path === config.watchDir)) {
         log.info("AGENT_WATCH_DIR is only used the first time. Manage backup folders in the web UI.");
       }
+      policy.apply(db.getSetting("deviceSettings"));
       await activate();
     },
+
+    // The OS refused to watch more folders (common on big Synology shares): use scheduled scans
+    watchLimitReached() {
+      if (watchLimitHit) return;
+      watchLimitHit = true;
+      log.warn(
+        "Too many folders to watch live (the operating system's watch limit was reached). " +
+          "Switching to a full scan every 15 minutes. On Linux/Synology you can raise the limit with: " +
+          "sysctl fs.inotify.max_user_watches=1048576"
+      );
+      applyScanMode();
+      connection?.heartbeatNow();
+    },
+    scanStatus: () => ({
+      scanMode: scheduled() ? "scheduled" : "live",
+      watchLimitHit,
+      lastScanAt,
+    }),
 
     // Connect to the gateway: get the folder list now, and again whenever it changes
     attach(conn) {

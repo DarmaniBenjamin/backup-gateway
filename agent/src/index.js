@@ -9,6 +9,7 @@ import { connectToGateway } from "./connection.js";
 import { createUploader } from "./uploader.js";
 import { createRestorer } from "./restorer.js";
 import { createFolderManager } from "./folders.js";
+import { createPolicy } from "./policy.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -50,8 +51,13 @@ function enqueue(task) {
 
 // 1) Watch the backup folders, and scan each one fully (catches changes made while the agent
 //    was off). The folders saved locally are used, so this works even without the gateway.
-const watcher = startWatcher(tracker.isExcluded, (absPath) => enqueue(() => tracker.inspect(absPath)));
-const folders = createFolderManager({ config, db, tracker, watcher, enqueue });
+const policy = createPolicy({ onChange: () => uploader?.trigger() });
+const watcher = startWatcher(
+  tracker.isExcluded,
+  (absPath) => enqueue(() => tracker.inspect(absPath)),
+  () => folders.watchLimitReached()
+);
+const folders = createFolderManager({ config, db, tracker, watcher, enqueue, policy });
 log.info(`Allowed areas on this device: ${config.allowedPaths.join(", ")}`);
 await folders.init();
 enqueue(() => {
@@ -67,6 +73,7 @@ try {
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
     folders: folders.report(),
+    background: { ...policy.status(), ...folders.scanStatus() },
   }));
 } catch (err) {
   log.error(err.message);
@@ -80,7 +87,7 @@ if (connection) {
   connection.onFoldersVersion((v) => folders.checkVersion(v));
   connection.onBrowse((request) => folders.answerBrowse(request));
   folders.whenSynced(() => {
-    uploader = createUploader({ db, tracker, connection });
+    uploader = createUploader({ db, tracker, connection, policy });
     uploader.trigger();
   });
   await folders.sync();
@@ -95,6 +102,7 @@ if (connection) {
 async function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
   uploader?.stop();
+  policy.stop();
   connection?.stop();
   await watcher.close();
   await queue;

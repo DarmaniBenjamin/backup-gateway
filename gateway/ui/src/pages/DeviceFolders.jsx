@@ -1,6 +1,6 @@
 // One device: which folders it backs up. Add folders with the live folder browser, change what
-// each one skips, or stop backing one up (its backups are kept). Also shows the device's
-// allowed areas, which can only be changed on the device itself.
+// each one skips, or stop backing one up (its backups are kept). Also its background behaviour
+// (speed limits, pauses, scan mode) and its allowed areas, which can only be changed on the device.
 
 import { useState } from "react";
 import { Link, useParams } from "react-router";
@@ -13,6 +13,7 @@ import LoadState from "../components/LoadState.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
 import FolderPicker from "../components/FolderPicker.jsx";
+import DeviceSettings from "../components/DeviceSettings.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const STATE = {
@@ -262,6 +263,15 @@ export default function DeviceFolders() {
           </ul>
         )}
       </section>
+
+      <DeviceSettings
+        deviceId={device.id}
+        settings={data.settings}
+        status={data.agentStatus}
+        live={device.live}
+        disabled={!multiFolder}
+        onSaved={reload}
+      />
 
       {removed.length > 0 && (
         <section className="mb-10">

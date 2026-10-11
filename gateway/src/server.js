@@ -19,6 +19,7 @@ import { verifyRequest, AuthError } from "./auth.js";
 import { CHUNK_SIZE, chunkId as makeChunkId, open, seal } from "./crypto-box.js";
 import { inspectFile } from "./inspect.js";
 import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js";
+import { cleanAgentStatus, settingsOf } from "./device-settings.js";
 import { log } from "./logger.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
@@ -184,6 +185,7 @@ export function createServer({ db, keys, storage, guard, broker }) {
       pendingChanges: Number.isInteger(info.pendingChanges) ? info.pendingChanges : null,
     });
     for (const report of cleanFolderReports(info.folders)) db.saveFolderReport(device.id, report);
+    if (info.background) db.setAgentStatus(device.id, cleanAgentStatus(info.background));
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
 
     // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
@@ -252,6 +254,7 @@ export function createServer({ db, keys, storage, guard, broker }) {
         .listFolders(device.id)
         .filter((f) => f.status === "active")
         .map((f) => ({ id: f.id, name: f.name, path: f.path, excludes: JSON.parse(f.excludes) })),
+      settings: settingsOf(fresh),
     };
     return sendBinary(res, 200, seal(encKey, Buffer.from(JSON.stringify(wanted)), `folders:${device.id}`));
   }
