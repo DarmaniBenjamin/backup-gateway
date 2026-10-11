@@ -12,7 +12,7 @@ import { createGuard } from "./guard.js";
 import { createBroker } from "./broker.js";
 import { buildAgentPackage } from "./agent-package.js";
 import { createInstalls } from "./installs.js";
-import { createOffsite } from "./cloud/offsite.js";
+import { createCopies } from "./cloud/copies.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -43,9 +43,10 @@ const windowsSetup = fs.existsSync(config.windowsSetupPath) ? fs.readFileSync(co
 if (!windowsSetup) log.warn(`Windows setup program not found at ${config.windowsSetupPath}: Windows devices get the command only`);
 const installs = createInstalls({ config, store, agentPackage, windowsSetup });
 const server = createServer({ db, keys, storage, guard, broker, installs });
-const offsite = createOffsite({ db, dataDir: config.dataDir, storage });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, offsite });
-offsite.start();
+// Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
+const copies = createCopies({ db, dataDir: config.dataDir, storage });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies });
+copies.start();
 
 function onListenError(name, port) {
   return (err) => {
@@ -74,7 +75,7 @@ adminServer.listen(config.adminPort, config.adminHost, () => {
 
 function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
-  offsite.stop();
+  copies.stop();
   adminServer.close();
   server.close(() => {
     db.close();

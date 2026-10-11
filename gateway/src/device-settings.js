@@ -72,6 +72,11 @@ export function cleanAgentStatus(s) {
     watchLimitHit: bool(s.watchLimitHit),
     lastScanAt: text(s.lastScanAt),
     fullAccess: bool(s.fullAccess),
+    // Synology: where the daily DSM settings export goes, and how the last one went
+    dsmExport:
+      s.dsmExport && typeof s.dsmExport === "object" && typeof s.dsmExport.dir === "string"
+        ? { dir: s.dsmExport.dir.slice(0, 1024), lastAt: text(s.dsmExport.lastAt), error: text(s.dsmExport.error) }
+        : null,
     // Folder lock, as the device reports it (the device enforces it, not the gateway)
     lock:
       s.lock && typeof s.lock === "object"

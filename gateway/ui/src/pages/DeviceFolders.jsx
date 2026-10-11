@@ -16,6 +16,7 @@ import Modal from "../components/Modal.jsx";
 import FolderTree from "../components/FolderTree.jsx";
 import DeviceSettings from "../components/DeviceSettings.jsx";
 import FolderLock from "../components/FolderLock.jsx";
+import DeviceCopies from "../components/DeviceCopies.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
 
 const STATE = {
@@ -35,7 +36,85 @@ function FolderState({ folder }) {
   );
 }
 
-function FolderRow({ folder, onEdit, onRemove, locked }) {
+// Which of the device's own off-site copies this folder goes to (all of them unless changed)
+function FolderCopies({ deviceId, folder, copies, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!copies.length) return null;
+  const on = folder.destinations ?? copies.map((c) => c.id);
+  async function toggle(id) {
+    setBusy(true);
+    setError("");
+    try {
+      const next = on.includes(id) ? on.filter((x) => x !== id) : [...on, id];
+      await api.post(`/devices/${deviceId}/folders/${folder.id}/destinations`, { destinations: next });
+      onChanged();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="text-dim">Off-site:</span>
+      {copies.map((c) => {
+        const active = on.includes(c.id);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            aria-pressed={active}
+            disabled={busy}
+            onClick={() => toggle(c.id)}
+            title={active ? "Goes to this copy. Click to stop sending this folder there." : "Not sent to this copy. Click to send it."}
+            className={`rounded-full border px-2.5 py-0.5 ${active ? "border-secure/50 bg-secure/10 text-secure" : "border-edge text-dim line-through"}`}
+          >
+            {c.kind === "s3" ? c.bucket : `Google Drive ${c.email}`}
+          </button>
+        );
+      })}
+      {error && <span className="text-alert">{error}</span>}
+    </div>
+  );
+}
+
+// Synology: the agent exports the DSM settings daily; offer to back that folder up
+function DsmSettings({ deviceId, dsm, folders, locked, live, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!dsm || folders.some((f) => f.path === dsm.dir)) return null;
+  async function add() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.post(`/devices/${deviceId}/folders`, { path: dsm.dir, excludes: [] });
+      onChanged();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="mb-6 flex flex-col gap-3 rounded-lg border border-secure/40 bg-secure/5 px-5 py-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="font-medium text-fg">Back up this NAS&rsquo;s DSM settings</p>
+        <p className="text-dim">
+          Users, shared folders and their permissions, network and services, exported once a day
+          {dsm.lastAt ? ` (last ${timeAgo(dsm.lastAt)})` : ""}. With them, a replacement NAS can be set up the same way.
+        </p>
+        {dsm.error && <p className="mt-1 text-warn">Last export failed: {dsm.error}</p>}
+        {error && <p className="mt-1 text-alert">{error}</p>}
+      </div>
+      <button type="button" className={primaryButton} disabled={busy || locked || !live} onClick={add} title={locked ? "Unlock the folders first" : undefined}>
+        Back up DSM settings
+      </button>
+    </section>
+  );
+}
+
+function FolderRow({ folder, onEdit, onRemove, locked, deviceId, copies, onChanged }) {
   return (
     <li className="grid gap-3 px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-6">
       <div className="min-w-0">
@@ -53,6 +132,7 @@ function FolderRow({ folder, onEdit, onRemove, locked }) {
             : "No numbers yet"}
           {folder.excludes.length > 0 && <> · skips {folder.excludes.map((e) => (e.startsWith("/") ? e.slice(1) : e)).join(", ")}</>}
         </p>
+        <FolderCopies deviceId={deviceId} folder={folder} copies={copies} onChanged={onChanged} />
       </div>
       <div className="flex gap-2">
         <button type="button" className={secondaryButton} disabled={locked} title={locked ? "Unlock the folders first" : undefined} onClick={() => onEdit(folder)}>
@@ -259,6 +339,15 @@ export default function DeviceFolders() {
         <FolderLock deviceId={device.id} lock={lock} live={device.live} folderCount={active.length} onChanged={reload} />
       )}
 
+      <DsmSettings
+        deviceId={device.id}
+        dsm={data.agentStatus?.dsmExport}
+        folders={active}
+        locked={locked}
+        live={device.live}
+        onChanged={reload}
+      />
+
       <section className="mb-10">
         <h2 className="mb-3 font-medium">Backup folders</h2>
         {active.length === 0 ? (
@@ -277,11 +366,22 @@ export default function DeviceFolders() {
         ) : (
           <ul className="divide-y divide-edge rounded-lg border border-edge bg-surface">
             {active.map((f) => (
-              <FolderRow key={f.id} folder={f} onEdit={setEditing} onRemove={setRemoving} locked={locked} />
+              <FolderRow
+                key={f.id}
+                folder={f}
+                onEdit={setEditing}
+                onRemove={setRemoving}
+                locked={locked}
+                deviceId={device.id}
+                copies={data.offsite?.copies ?? []}
+                onChanged={reload}
+              />
             ))}
           </ul>
         )}
       </section>
+
+      {data.offsite && <DeviceCopies device={device} offsite={data.offsite} onChanged={reload} />}
 
       <DeviceSettings
         deviceId={device.id}

@@ -65,23 +65,56 @@ keeps backing up exactly those folders and refuses any other list, even from a h
 change them, click **Unlock** and enter the key: the device unlocks for 30 minutes, then locks again by
 itself. Five wrong keys in a row block tries for 15 minutes.
 
-## Off-site copy (Backblaze B2 and other S3 storage)
+## Off-site copies (Backblaze B2, other S3 storage, Google Drive)
 
-On the **Off-site** page, connect a bucket that has **Object Lock** turned on (Backblaze B2, Wasabi,
-Amazon S3 or any S3-compatible storage). The gateway then uploads every clean backup there, locked
-for the number of days you choose, so nobody can delete or change it before then — not ransomware,
-not someone with the gateway's key. Chunks still in use are re-locked before their lock runs out.
-Everything uploaded is already encrypted; quarantined files are never sent.
+Every clean backup can also go to the cloud. Everything sent is already encrypted, and quarantined
+files are never sent. There are two kinds of copy:
 
-When you connect, you get a **recovery key** (`BGRK-…`), shown once. Keep it offline. If the gateway
-is ever lost, rebuild it from the cloud on a new machine:
+- **Failsafe** (on the **Off-site** page): one location that gets everything, from every device.
+  **Back up everything now** sends whatever it doesn't have yet straight away.
+- **A device's own copies** (on each device's page, under **Off-site copies**): its own Backblaze
+  bucket with its own application key, and/or its own Google Drive. Each backup folder on the device
+  page picks which of the device's copies it goes to (all of them by default).
+
+A bucket must have **Object Lock** turned on (Backblaze B2, Wasabi, Amazon S3 or any S3-compatible
+storage). Backups are locked there for the number of days you choose, so nobody can delete or change
+them before then: not ransomware, not someone with the gateway's key. Google Drive can't lock files,
+so use a locked bucket as the failsafe.
+
+### Google Drive (one-time setup)
+
+1. In https://console.cloud.google.com make a project, then in **APIs & Services > Library** turn on
+   the **Google Drive API**.
+2. **OAuth consent screen**: External, fill in the app name and your email, then **Publish app**
+   (status "In production"). In "Testing", Google drops the sign-in after 7 days.
+3. **Credentials > Create credentials > OAuth client ID**, type **Desktop app**. Copy the client ID
+   and client secret.
+4. On a device's page, **Add a Google Drive**, paste them, and sign in with the Google account. The
+   gateway only gets access to the files it creates itself (drive.file), nothing else in the account.
+
+### Recovery key
+
+The first copy you connect gives you a **recovery key** (`BGRK-…`), shown once; it opens every copy.
+Keep it offline. If the gateway is ever lost, rebuild it on a new machine:
 
 ```bash
 cd gateway
-npm run recover -- --endpoint https://s3.us-west-004.backblazeb2.com --bucket YOUR-BUCKET --key-id YOUR-KEY-ID --to ./data
+# from a bucket (the failsafe, or a device's own)
+npm run recover -- --endpoint s3.us-west-004.backblazeb2.com --bucket YOUR-BUCKET --key-id YOUR-KEY-ID --to ./data
+# from a Google Drive copy: download its "Backup Gateway - …" folder and unzip it all into one folder
+npm run recover -- --from-folder ./backup-gateway-drive --to ./data
 ```
 
-It asks for the bucket's application key and the recovery key, then downloads and checks every backup.
+It asks for the keys, then downloads and checks every backup. A device's own copy rebuilds a gateway
+with just that device in it.
+
+## Synology DSM settings
+
+On a Synology, the agent exports the DSM settings (users, groups, shared folders and their
+permissions, network, services) once a day with Synology's own tool into
+`/volume1/@backup-agent/DSM-settings/dsm-settings.dss`. On the device page, **Back up DSM settings**
+adds that folder, so every day's export is kept as a version. To put settings back: DSM, Control
+Panel > Update & Restore > Configuration Backup > Restore, with the restored .dss file.
 
 ## Status
 

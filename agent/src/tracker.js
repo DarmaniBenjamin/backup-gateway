@@ -33,13 +33,21 @@ function splitExcludes(excludes) {
   return { patterns: names, subPaths: paths };
 }
 
-// skipPaths: never backed up, even inside a backup folder (the agent's own data and log, and on
-// Linux the system's virtual folders like /proc), which matters most with full access
-export function createTracker(db, onChange, { snapshots = null, skipPaths = [] } = {}) {
-  const skip = skipPaths.map((p) => comparable(path.resolve(p)));
+// skipPaths: never backed up, even inside a backup folder (the agent's own data and log).
+// systemPaths: skipped when a backup folder contains them (Linux's virtual folders like /proc,
+// and /tmp), which matters with full access; a folder chosen inside one of them is still backed up.
+export function createTracker(db, onChange, { snapshots = null, skipPaths = [], systemPaths = [] } = {}) {
+  const norm = (list) => list.map((p) => comparable(path.resolve(p)));
+  const skip = norm(skipPaths);
+  const system = norm(systemPaths);
+  const under = (p, s) => p === s || p.startsWith(s.endsWith(path.sep) ? s : s + path.sep);
   const isSkipped = (absPath) => {
     const p = comparable(absPath);
-    return skip.some((s) => p === s || p.startsWith(s.endsWith(path.sep) ? s : s + path.sep));
+    if (skip.some((s) => under(p, s))) return true;
+    const hit = system.find((s) => under(p, s));
+    if (!hit) return false;
+    const f = folderFor(absPath);
+    return !f || !under(comparable(f.path), hit); // the folder itself is outside: skip
   };
   let folders = []; // [{ id, name, path, excludes, patterns }]
 

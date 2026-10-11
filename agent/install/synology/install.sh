@@ -17,6 +17,7 @@
 #   /volumeN/@backup-agent/agent.env  settings (root only)
 #   /volumeN/@backup-agent/data       the agent's database and private keys (root only)
 #   /volumeN/@backup-agent/agent.log  the agent's log
+#   /volumeN/@backup-agent/DSM-settings  a daily export of the DSM settings, to back up
 # and a "backup-agent" system service that starts with the NAS.
 
 set -euo pipefail
@@ -272,6 +273,7 @@ AGENT_DEVICE_NAME="$NAME"
 AGENT_DATA_DIR="$DATA_DIR"
 AGENT_LOG_LEVEL="$LOG_LEVEL"
 AGENT_LOG_FILE="$LOG_FILE"
+AGENT_DSM_EXPORT_DIR="$PREFIX/DSM-settings"
 AGENT_ENROLL_CODE="$CODE"
 EOF
   chmod 0600 "$CONF.new"

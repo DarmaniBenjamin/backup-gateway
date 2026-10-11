@@ -12,6 +12,7 @@ import { createFolderManager } from "./folders.js";
 import { createPolicy } from "./policy.js";
 import { createSnapshots } from "./snapshot.js";
 import { createLock } from "./lock.js";
+import { createDsmExport } from "./dsm-export.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -48,11 +49,8 @@ const tracker = createTracker(db, (change) => {
   uploader?.trigger();
 }, {
   snapshots,
-  skipPaths: [
-    config.dataDir,
-    ...(process.env.AGENT_LOG_FILE?.trim() ? [process.env.AGENT_LOG_FILE.trim()] : []),
-    ...(process.platform === "linux" ? ["/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "/lost+found"] : []),
-  ],
+  skipPaths: [config.dataDir, ...(process.env.AGENT_LOG_FILE?.trim() ? [process.env.AGENT_LOG_FILE.trim()] : [])],
+  systemPaths: process.platform === "linux" ? ["/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "/lost+found"] : [],
 });
 
 // Process one path at a time, in order, so checks never overlap
@@ -79,6 +77,10 @@ log.info(
     : `Allowed areas on this device: ${config.allowedPaths.join(", ")}`
 );
 await folders.init();
+
+// Synology: export the DSM settings once a day, so they can be backed up too
+const dsmExport = createDsmExport();
+dsmExport.start();
 enqueue(() => {
   log.info(`${db.countFiles()} files tracked, ${db.countPending()} changes waiting to send`);
   uploader?.trigger();
@@ -92,7 +94,7 @@ try {
     filesTracked: db.countFiles(),
     pendingChanges: db.countPending(),
     folders: folders.report(),
-    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess },
+    background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status() },
   }));
 } catch (err) {
   log.error(err.message);

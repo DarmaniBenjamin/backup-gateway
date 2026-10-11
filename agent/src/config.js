@@ -54,6 +54,12 @@ export function loadConfig() {
     : allowedSetting
     ? allowedSetting.split(";").map((p) => p.trim()).filter(Boolean)
     : [watchDir ?? os.homedir()];
+  // Synology: the DSM settings export (see dsm-export.js) can always be backed up
+  const dsmDir = process.env.AGENT_DSM_EXPORT_DIR?.trim();
+  if (dsmDir && !fullAccess) {
+    fs.mkdirSync(dsmDir, { recursive: true, mode: 0o700 });
+    allowedRaw.push(dsmDir);
+  }
   const allowedPaths = [];
   for (const p of allowedRaw) {
     const resolved = path.resolve(p);

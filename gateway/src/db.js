@@ -147,6 +147,10 @@ export function openDatabase(dataDir) {
   `);
 
   // Upgrade older databases: add columns that didn't exist in earlier versions
+  // Which of its device's own off-site copies each backup folder goes to (copy ids); NULL = all of them
+  const folderColumns = db.prepare("PRAGMA table_info(device_folders)").all().map((c) => c.name);
+  if (!folderColumns.includes("destinations")) db.exec("ALTER TABLE device_folders ADD COLUMN destinations TEXT");
+
   const deviceColumns = db.prepare("PRAGMA table_info(devices)").all().map((c) => c.name);
   if (!deviceColumns.includes("kx_public_key")) {
     db.exec("ALTER TABLE devices ADD COLUMN kx_public_key TEXT");
@@ -345,6 +349,7 @@ export function openDatabase(dataDir) {
       "UPDATE device_folders SET status = 'removed', removed_at = ?, removed_by = ?, state = NULL WHERE id = ? AND status = 'active'"
     ),
     setFolderExcludes: db.prepare("UPDATE device_folders SET excludes = ? WHERE id = ?"),
+    setFolderDestinations: db.prepare("UPDATE device_folders SET destinations = ? WHERE id = ?"),
     folderReport: db.prepare(`
       UPDATE device_folders SET state = ?, error = ?, files = ?, bytes = ?, reported_at = ?
       WHERE id = ? AND device_id = ? AND status = 'active'
@@ -464,6 +469,7 @@ export function openDatabase(dataDir) {
     reactivateFolder: (id, { excludes, by }) => q.reactivateFolder.run(JSON.stringify(excludes ?? []), now(), by ?? null, id),
     removeFolder: (id, by) => q.removeFolder.run(now(), by ?? null, id).changes === 1,
     setFolderExcludes: (id, excludes) => q.setFolderExcludes.run(JSON.stringify(excludes), id),
+    setFolderDestinations: (id, destinations) => q.setFolderDestinations.run(destinations ? JSON.stringify(destinations) : null, id),
     saveFolderReport: (deviceId, r) =>
       q.folderReport.run(r.state, r.error ?? null, r.files ?? null, r.bytes ?? null, now(), r.id, deviceId),
     bumpFoldersVersion: (deviceId) => q.bumpFolders.run(deviceId),

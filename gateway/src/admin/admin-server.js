@@ -171,14 +171,26 @@ function serveStatic(req, res, pathname) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
-export function createAdminServer({ db, store, keys, storage, config, broker, installs, offsite }) {
-  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, offsite });
+export function createAdminServer({ db, store, keys, storage, config, broker, installs, copies }) {
+  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies });
   warmStatic();
 
   return http.createServer(async (req, res) => {
     const ip = req.socket.remoteAddress;
     const url = new URL(req.url, "http://localhost");
     const pathname = url.pathname;
+
+    // Back from Google's sign-in page (Google Drive copy): finish, then show the Off-site page
+    if (pathname === "/admin/oauth/google" && req.method === "GET") {
+      let to = "/offsite";
+      try {
+        to = await matchRoute.oauthCallback(Object.fromEntries(url.searchParams), ip);
+      } catch (err) {
+        log.error("Google sign-in error", err);
+      }
+      res.writeHead(303, { ...SECURITY_HEADERS, Location: to, "Cache-Control": "no-store" });
+      return res.end();
+    }
 
     if (!pathname.startsWith("/admin/api/")) {
       if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed" });
@@ -206,6 +218,7 @@ export function createAdminServer({ db, store, keys, storage, config, broker, in
         admin: session ? { id: session.admin_id, username: session.username } : null,
         params: route.params,
         query: Object.fromEntries(url.searchParams),
+        host: req.headers.host,
         body: req.method === "GET" ? {} : await readJsonBody(req),
         ip,
         setSession(adminId) {
