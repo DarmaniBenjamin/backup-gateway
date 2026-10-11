@@ -72,7 +72,7 @@ function LiveStatus({ status, live }) {
   let tone = "text-good";
   if (status.paused) {
     text = `Paused: ${status.paused}`;
-    tone = "text-warn";
+    tone = "text-signal";
   } else if (status.limitMbps) {
     text = `Uploading at up to ${status.limitMbps} Mbps (${status.workHours ? "work hours" : "outside work hours"})`;
   } else {
@@ -88,7 +88,7 @@ function LiveStatus({ status, live }) {
         {status.metered === true && " · metered connection"}
       </p>
       {status.watchLimitHit && (
-        <p className="text-warn">
+        <p className="text-signal">
           This device couldn&rsquo;t watch all its files live, so it switched to a full scan every 15 minutes. Choose a
           scheduled scan below, or raise the system&rsquo;s watch limit.
         </p>
@@ -143,7 +143,7 @@ export default function DeviceSettings({ deviceId, settings, status, live, disab
       <p className="mb-3 mt-1 max-w-2xl text-sm text-dim">
         How hard this device may work, and when. Restores are never slowed down or paused.
       </p>
-      <div className="panel-cut rounded-lg border border-edge bg-surface">
+      <div className="rounded-lg border border-edge bg-surface">
         <div className="border-b border-edge px-5 py-4">
           <LiveStatus status={status} live={live} />
         </div>

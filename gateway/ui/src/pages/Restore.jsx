@@ -116,7 +116,7 @@ export default function Restore() {
       )}
 
       {/* 1. Activity: find the moment to go back to */}
-      <section className="panel-cut mb-8 rounded-lg border border-edge bg-surface p-5">
+      <section className="mb-8 rounded-lg border border-edge bg-surface p-5">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-medium">Backup activity</h2>

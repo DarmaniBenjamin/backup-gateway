@@ -237,7 +237,7 @@ export default function DeviceFolders() {
       </PageHeader>
 
       {!multiFolder && (
-        <p className="mb-6 rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-fg">
+        <p className="mb-6 rounded-lg border border-signal/40 bg-signal/10 px-4 py-3 text-sm text-fg">
           This device&rsquo;s agent is too old to manage folders here. Update it to version 0.7 or newer and restart it.
         </p>
       )}
