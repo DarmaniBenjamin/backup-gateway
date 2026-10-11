@@ -93,7 +93,9 @@ export function createS3({ endpoint, region, bucket, accessKeyId, secretAccessKe
           const data = Buffer.concat(parts);
           if (res.statusCode >= 300) {
             const xml = data.toString("utf8");
-            return reject(new S3Error(res.statusCode, xmlValue(xml, "Code"), xmlValue(xml, "Message")));
+            const err = new S3Error(res.statusCode, xmlValue(xml, "Code"), xmlValue(xml, "Message"));
+            err.bucket = bucket;
+            return reject(err);
           }
           resolve({ status: res.statusCode, headers: res.headers, body: data });
         });

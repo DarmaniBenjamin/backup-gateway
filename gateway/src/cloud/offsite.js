@@ -61,7 +61,11 @@ function explain(err, stepName = "") {
       if (/lock|retention/i.test(err.message)) return "Object Lock isn't turned on for this bucket.";
       return `${err.message} (${err.code})`;
     case "NoSuchBucket":
-      return `the storage says there's no such bucket (${err.message}). Check the bucket name, that the endpoint is the one shown on the bucket's page, and that the key was made for this bucket.`;
+      return `the storage says there's no such bucket (${err.message}). ${
+        /^[0-9a-f]{24}$/i.test(err.bucket ?? "")
+          ? "That looks like the Bucket ID. Use the Bucket Name instead (the name at the top of the bucket in Backblaze)."
+          : "Check the bucket name is typed exactly as it's shown (capital letters count), that the endpoint is the one shown on the bucket's page, and that the key was made for this bucket."
+      }`;
     case "RequestTimeTooSkewed":
       return "This computer's clock is wrong, so the storage service rejects its requests. Fix the date and time.";
     default:
@@ -88,8 +92,19 @@ export function cleanCloudSettings(body) {
   const derived = PROVIDERS[provider].regionFrom ? endpoint.match(PROVIDERS[provider].regionFrom)?.[1] : null;
   const region = String(body.region ?? "").trim() || derived || (provider === "s3" ? "us-east-1" : "");
   if (!/^[a-z0-9-]{2,40}$/.test(region)) throw new CloudError("Couldn't tell the region from the endpoint. Check the endpoint address.");
-  const bucket = String(body.bucket ?? "").trim();
-  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new CloudError("That isn't a valid bucket name.");
+  // The bucket name exactly as it's shown in the storage service (Backblaze allows capital letters,
+  // e.g. "Protonic-Backups"). Requests use path-style addresses, so any case works.
+  const bucket = String(body.bucket ?? "").trim().replace(/^s3:\/\//i, "").replace(/\/+$/, "");
+  if (!bucket) throw new CloudError("Enter the bucket name.");
+  const badChar = bucket.match(/[^A-Za-z0-9._-]/);
+  if (badChar) {
+    throw new CloudError(
+      badChar[0] === " "
+        ? "The bucket name can't have spaces in it. Copy the Bucket Name from the bucket's page in Backblaze."
+        : `The bucket name can't have "${badChar[0]}" in it. Copy the Bucket Name from the bucket's page in Backblaze.`
+    );
+  }
+  if (bucket.length < 3 || bucket.length > 63) throw new CloudError("A bucket name is 3 to 63 characters long. Copy the Bucket Name from the bucket's page.");
   const keyId = String(body.keyId ?? "").trim();
   const secret = String(body.secret ?? "").trim();
   if (!keyId || keyId.length > 128 || /\s/.test(keyId)) throw new CloudError("Enter the key ID.");

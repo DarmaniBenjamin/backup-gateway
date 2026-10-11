@@ -128,7 +128,7 @@ function SetupForm({ onConnected }) {
         <Field id="endpoint" label="Endpoint" hint={provider === "b2" ? "Shown on the bucket's page in Backblaze, e.g. s3.us-west-004.backblazeb2.com" : "The S3 endpoint address for the bucket's region."}>
           <input id="endpoint" className={`${inputClass} font-mono`} placeholder={p.endpoint} spellCheck={false} autoComplete="off" value={form.endpoint} onChange={set("endpoint")} />
         </Field>
-        <Field id="bucket" label="Bucket name">
+        <Field id="bucket" label="Bucket name" hint={provider === "b2" ? "Exactly as shown at the top of the bucket in Backblaze (the name, not the Bucket ID)." : "Exactly as shown in the storage service."}>
           <input id="bucket" className={`${inputClass} font-mono`} placeholder="e.g. protonic-backups" spellCheck={false} autoComplete="off" value={form.bucket} onChange={set("bucket")} />
         </Field>
         <div className="grid gap-5 sm:grid-cols-2">
