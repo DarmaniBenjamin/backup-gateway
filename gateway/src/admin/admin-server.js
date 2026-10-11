@@ -10,6 +10,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { createAdminApi, ApiError } from "./api.js";
 import { SESSION_MAX_MS } from "./admin-store.js";
@@ -74,16 +75,63 @@ function readJsonBody(req) {
   });
 }
 
-function sendJson(res, status, data, extraHeaders = {}) {
-  const body = JSON.stringify(data);
-  res.writeHead(status, {
-    ...SECURITY_HEADERS,
-    "Content-Type": "application/json",
-    "Content-Length": Buffer.byteLength(body),
-    "Cache-Control": "no-store",
-    ...extraHeaders,
-  });
+// Which compression the browser takes: Brotli (smallest), else gzip, else none
+function pickEncoding(req) {
+  const accepted = String(req?.headers["accept-encoding"] ?? "");
+  if (/\bbr\b/.test(accepted)) return "br";
+  if (/\bgzip\b/.test(accepted)) return "gzip";
+  return null;
+}
+
+function sendJson(res, status, data, extraHeaders = {}, req = null) {
+  let body = Buffer.from(JSON.stringify(data));
+  const headers = { ...SECURITY_HEADERS, "Content-Type": "application/json", "Cache-Control": "no-store", Vary: "Accept-Encoding" };
+  // Big answers (file lists, activity) go out gzipped: much less to send when the UI is used over a network
+  if (body.length > 4096 && pickEncoding(req)) {
+    body = zlib.gzipSync(body, { level: 4 });
+    headers["Content-Encoding"] = "gzip";
+  }
+  res.writeHead(status, { ...headers, "Content-Length": body.length, ...extraHeaders });
   res.end(body);
+}
+
+// The built web UI, kept in memory already compressed. Files are read and compressed once, the
+// first time they're asked for, and again only if they change on disk (after a new build).
+const COMPRESSIBLE = new Set([".html", ".js", ".css", ".svg", ".json", ".ico"]);
+const staticCache = new Map();
+
+function loadStatic(filePath) {
+  const stat = fs.statSync(filePath);
+  const cached = staticCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached;
+  const raw = fs.readFileSync(filePath);
+  const entry = { mtimeMs: stat.mtimeMs, size: stat.size, raw, etag: `"${stat.size.toString(36)}-${Math.floor(stat.mtimeMs).toString(36)}"` };
+  if (COMPRESSIBLE.has(path.extname(filePath)) && raw.length > 1024) {
+    entry.br = zlib.brotliCompressSync(raw, {
+      params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length },
+    });
+    entry.gzip = zlib.gzipSync(raw, { level: 9 });
+  }
+  staticCache.set(filePath, entry);
+  return entry;
+}
+
+// Compress the UI files in the background at startup, so even the first page load is quick
+function warmStatic() {
+  const assets = path.join(UI_DIR, "assets");
+  const files = [path.join(UI_DIR, "index.html")];
+  if (fs.existsSync(assets)) for (const name of fs.readdirSync(assets)) files.push(path.join(assets, name));
+  const next = () => {
+    const f = files.shift();
+    if (!f) return;
+    try {
+      if (fs.existsSync(f)) loadStatic(f);
+    } catch {
+      // served (and reported) when it's actually asked for
+    }
+    setImmediate(next);
+  };
+  setImmediate(next);
 }
 
 function serveStatic(req, res, pathname) {
@@ -93,21 +141,39 @@ function serveStatic(req, res, pathname) {
     return res.end(body);
   }
   // Resolve safely inside UI_DIR; anything unknown falls back to index.html (single-page app)
-  let filePath = path.resolve(UI_DIR, "." + decodeURIComponent(pathname));
+  let filePath;
+  try {
+    filePath = path.resolve(UI_DIR, "." + decodeURIComponent(pathname));
+  } catch {
+    filePath = "";
+  }
   if (!filePath.startsWith(UI_DIR) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     filePath = path.join(UI_DIR, "index.html");
   }
+  const file = loadStatic(filePath);
   const ext = path.extname(filePath);
-  res.writeHead(200, {
+  const headers = {
     ...SECURITY_HEADERS,
     "Content-Type": MIME[ext] ?? "application/octet-stream",
     "Cache-Control": filePath.includes(`${path.sep}assets${path.sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
-  });
-  fs.createReadStream(filePath).pipe(res);
+    ETag: file.etag,
+    Vary: "Accept-Encoding",
+  };
+  if (req.headers["if-none-match"] === file.etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  const encoding = file.br ? pickEncoding(req) : null;
+  const body = encoding ? file[encoding] : file.raw;
+  if (encoding) headers["Content-Encoding"] = encoding;
+  headers["Content-Length"] = body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === "HEAD" ? undefined : body);
 }
 
 export function createAdminServer({ db, store, keys, storage, config, broker, installs, offsite }) {
   const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, offsite });
+  warmStatic();
 
   return http.createServer(async (req, res) => {
     const ip = req.socket.remoteAddress;
@@ -152,7 +218,7 @@ export function createAdminServer({ db, store, keys, storage, config, broker, in
           extraHeaders["Set-Cookie"] = `${COOKIE}=; ${cookieBase}; Max-Age=0`;
         },
       });
-      return sendJson(res, 200, result ?? null, extraHeaders);
+      return sendJson(res, 200, result ?? null, extraHeaders, req);
     } catch (err) {
       if (err instanceof ApiError) return sendJson(res, err.status, { error: err.message });
       log.error("Admin API error", err);

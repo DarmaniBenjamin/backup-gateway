@@ -40,7 +40,7 @@ try {
 }
 if (!agentPackage) log.warn(`Agent folder not found at ${config.agentDir}: one-line installs are off (set GATEWAY_AGENT_DIR)`);
 const windowsSetup = fs.existsSync(config.windowsSetupPath) ? fs.readFileSync(config.windowsSetupPath) : null;
-if (!windowsSetup) log.info(`No Windows setup program at ${config.windowsSetupPath} (optional: npm run build-windows-setup)`);
+if (!windowsSetup) log.warn(`Windows setup program not found at ${config.windowsSetupPath}: Windows devices get the command only`);
 const installs = createInstalls({ config, store, agentPackage, windowsSetup });
 const server = createServer({ db, keys, storage, guard, broker, installs });
 const offsite = createOffsite({ db, dataDir: config.dataDir, storage });

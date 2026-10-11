@@ -1,18 +1,21 @@
 // Routes. Everything except the login screen requires being logged in.
 
+import { lazy } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { useAuth } from "./auth-context.js";
 import Layout from "./components/Layout.jsx";
 import Login from "./pages/Login.jsx";
 import Overview from "./pages/Overview.jsx";
-import Devices from "./pages/Devices.jsx";
-import DeviceFolders from "./pages/DeviceFolders.jsx";
-import Restore from "./pages/Restore.jsx";
-import Quarantine from "./pages/Quarantine.jsx";
-import Jobs from "./pages/Jobs.jsx";
-import Integrity from "./pages/Integrity.jsx";
-import Audit from "./pages/Audit.jsx";
-import Offsite from "./pages/Offsite.jsx";
+import { pages } from "./pages.js";
+
+const Devices = lazy(pages.Devices);
+const DeviceFolders = lazy(pages.DeviceFolders);
+const Restore = lazy(pages.Restore);
+const Quarantine = lazy(pages.Quarantine);
+const Jobs = lazy(pages.Jobs);
+const Integrity = lazy(pages.Integrity);
+const Audit = lazy(pages.Audit);
+const Offsite = lazy(pages.Offsite);
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();

@@ -90,18 +90,17 @@ function Result({ result, onClose }) {
         <>
           {install.setupUrl && (
             <>
-              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest: run the setup program on the new PC</h3>
+              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest: the setup program</h3>
               <p className="mt-1 text-sm text-dim">
-                Open this link in a browser on the new PC (or download it here and copy it over on a USB stick), then
-                double-click <span className="font-mono text-fg">BackupAgentSetup.exe</span> and allow it to make changes.
+                Download it and put it on the new PC (or open the link below in a browser on that PC), then double-click{" "}
+                <span className="font-mono text-fg">BackupAgentSetup.exe</span> and allow it to make changes.
               </p>
-              <div className="mt-2">
-                <CopyBox id="setup-url" text={install.setupUrl} label="Copy download link" />
-              </div>
-              <a href={install.setupUrl} className={`${secondaryButton} mt-2`} download>
+              <a href={install.setupUrl} className={`${primaryButton} mt-3 w-full sm:w-auto`} download="BackupAgentSetup.exe">
                 <Download size={16} aria-hidden="true" />
-                Download BackupAgentSetup.exe here
+                Download BackupAgentSetup.exe
               </a>
+              <p className="mb-1 mt-3 text-xs text-dim">Download link for the new PC</p>
+              <CopyBox id="setup-url" text={install.setupUrl} label="Copy download link" />
               <p className="mt-2 text-xs text-dim">
                 Windows may say it &ldquo;protected your PC&rdquo; because the program isn&rsquo;t code-signed yet: click More info, then
                 Run anyway.

@@ -3,13 +3,14 @@
 // Alerts are checked here for every page: they appear as a banner above the page and as the
 // pill in the top bar. Pages get the alerts (and a refresh function) through the outlet context.
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { ChevronDown, LogOut, Menu, ShieldAlert, X } from "lucide-react";
 import { useAuth } from "../auth-context.js";
 import { usePolling } from "../usePolling.js";
 import Logo from "./Logo.jsx";
 import AlertBanner from "./AlertBanner.jsx";
+import { preloadPages } from "../pages.js";
 
 const NAV = [
   { to: "/", label: "Overview", end: true },
@@ -78,6 +79,7 @@ export default function Layout() {
   const openAlerts = (alerts ?? []).filter((a) => !a.acknowledgedAt).length;
 
   useEffect(() => setMenuOpen(false), [location.pathname]);
+  useEffect(preloadPages, []);
 
   // While the phone menu is open: Escape closes it, and the page behind doesn't scroll
   useEffect(() => {
@@ -101,7 +103,7 @@ export default function Layout() {
 
   return (
     <div className="min-h-dvh">
-      <header className="glass sticky top-0 z-30 border-b border-edge">
+      <header className="frosted sticky top-0 z-30 border-b border-edge">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link to="/" className="flex shrink-0 items-center gap-2.5">
             <Logo size={30} />
@@ -196,7 +198,9 @@ export default function Layout() {
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         <AlertBanner alerts={alerts} onChange={reloadAlerts} />
-        <Outlet context={{ alerts, reloadAlerts }} />
+        <Suspense fallback={null}>
+          <Outlet context={{ alerts, reloadAlerts }} />
+        </Suspense>
       </main>
     </div>
   );

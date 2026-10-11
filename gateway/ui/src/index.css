@@ -44,11 +44,18 @@
   }
   body {
     @apply bg-night text-fg font-sans antialiased;
-    /* The aurora: a violet glow top right, a teal glow bottom left */
+  }
+  /* The aurora: a violet glow top right, a teal glow bottom left. It sits on its own fixed layer
+     (instead of background-attachment: fixed), so scrolling never has to repaint it. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
     background-image:
       radial-gradient(900px 520px at 88% -8%, rgb(98 76 255 / 0.28), transparent 70%),
       radial-gradient(760px 520px at 4% 108%, rgb(15 181 200 / 0.18), transparent 70%);
-    background-attachment: fixed;
   }
   h1,
   h2 {
@@ -87,10 +94,16 @@
   }
 }
 
-/* Frosted glass behind every translucent panel */
+/* Translucent panel over the aurora. The background behind panels is only soft gradients, so a
+   blur (which the browser recomputes on every scroll frame) adds nothing visible: it's left out. */
 @utility glass {
   background-color: var(--color-surface);
-  backdrop-filter: blur(18px) saturate(140%);
+}
+
+/* Frosted glass, for the few things that float over the page content (the top bar) */
+@utility frosted {
+  background-color: rgb(11 10 26 / 0.72);
+  backdrop-filter: blur(14px) saturate(140%);
 }
 
 /* Chart colours — validated together for colour-blind separation and contrast on the glass panels.

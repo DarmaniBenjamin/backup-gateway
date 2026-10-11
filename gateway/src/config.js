@@ -49,10 +49,11 @@ export function loadConfig() {
       process.env.GATEWAY_AGENT_DIR?.trim() || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "agent")
     ),
 
-    // The Windows setup program (built with "npm run build-windows-setup"). Optional: without it,
-    // Windows devices are added with the PowerShell or Command Prompt command.
+    // The Windows setup program offered for download when a Windows device is added. A built copy
+    // comes with the gateway (setup-exe/); "npm run build-windows-setup" rebuilds it from setup.c.
     windowsSetupPath: path.resolve(
-      process.env.GATEWAY_WINDOWS_SETUP?.trim() || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "BackupAgentSetup.exe")
+      process.env.GATEWAY_WINDOWS_SETUP?.trim() ||
+        path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "setup-exe", "BackupAgentSetup.exe")
     ),
 
     dataDir,

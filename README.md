@@ -29,9 +29,10 @@ It downloads the agent from the gateway, checks its SHA-256, installs it as a ba
 connects — no code or settings to type. The command works once and expires with its enrollment code.
 For devices on other computers, set `GATEWAY_HOST=0.0.0.0` and `GATEWAY_PUBLIC_URL` in the gateway's `.env`.
 
-**Windows PCs and servers** get three choices in the same window: a setup program to download and
-double-click (`BackupAgentSetup.exe`, build it once with `npm run build-windows-setup` in `gateway/`,
-needs Go), or one command for PowerShell or Command Prompt run as Administrator. All three do the same:
+**Windows PCs and servers** get three choices in the same window: a setup program to download right
+there and double-click (`BackupAgentSetup.exe`, a 7 KB program that comes with the gateway; its source
+is `gateway/setup-exe/setup.c`, rebuilt with `npm run build-windows-setup`, which needs Zig), or one
+command for PowerShell or Command Prompt run as Administrator. All three do the same:
 the agent goes to `C:\Program Files\BackupAgent`, its settings and keys to `C:\ProgramData\BackupAgent`
 (SYSTEM and Administrators only), and it runs as a background task that starts with Windows. To remove
 it: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\BackupAgent\uninstall.ps1"` (add

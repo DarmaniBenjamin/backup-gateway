@@ -17,6 +17,33 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// One folder level: the latest version of each path under the folder (as of a time), grouped by the
+// next part of the path, so sub-folders come back as one row with their totals.
+// For a folder, "folder/" < rel_path < "folder0" is every path under folder/ ('0' comes right after '/').
+function folderListingSql(range) {
+  return `
+      WITH latest AS (
+        SELECT rel_path, MAX(version_no) AS version_no, type, size, received_at, COUNT(*) AS version_count
+        FROM file_versions
+        WHERE device_id = :device AND status = 'ok' ${range}
+          AND (:at IS NULL OR received_at <= :at)
+        GROUP BY rel_path
+      ),
+      parts AS (
+        SELECT *, substr(rel_path, :cut) AS rest FROM latest
+      )
+      SELECT
+        CASE WHEN instr(rest, '/') = 0 THEN rest ELSE substr(rest, 1, instr(rest, '/') - 1) END AS name,
+        instr(rest, '/') > 0 AS is_folder,
+        rel_path, version_no, type, size, received_at, version_count,
+        SUM(type <> 'deleted') AS files,
+        SUM(CASE WHEN type <> 'deleted' THEN COALESCE(size, 0) ELSE 0 END) AS total_size,
+        SUM(type = 'deleted') AS deleted_files
+      FROM parts
+      GROUP BY is_folder, name
+    `;
+}
+
 export function openDatabase(dataDir) {
   const db = new DatabaseSync(path.join(dataDir, "gateway.db"));
 
@@ -148,6 +175,62 @@ export function openDatabase(dataDir) {
     db.exec("ALTER TABLE file_versions ADD COLUMN reviewed_at TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_versions_status ON file_versions (device_id, status, received_at)");
+  // For the activity charts (changes per device since a time) and the quarantine list
+  db.exec("CREATE INDEX IF NOT EXISTS idx_versions_received ON file_versions (device_id, received_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_versions_quarantined ON file_versions (received_at) WHERE status = 'quarantined'");
+
+  // Running totals per device, kept up to date by SQLite itself as versions and chunks are added, so
+  // the dashboard doesn't have to count every version on each refresh (slow with millions of them).
+  // Versions are never deleted, only added; chunks can be added and removed.
+  const hasTotals = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'version_totals'").get();
+  if (!hasTotals) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE version_totals (
+          device_id   TEXT PRIMARY KEY,
+          versions    INTEGER NOT NULL,
+          paths       INTEGER NOT NULL,
+          last_backup TEXT
+        );
+        INSERT INTO version_totals (device_id, versions, paths, last_backup)
+          SELECT device_id, COUNT(*), COUNT(DISTINCT rel_path), MAX(received_at) FROM file_versions GROUP BY device_id;
+        CREATE TRIGGER version_totals_add AFTER INSERT ON file_versions BEGIN
+          INSERT INTO version_totals (device_id, versions, paths, last_backup)
+            VALUES (NEW.device_id, 1, 1, NEW.received_at)
+            ON CONFLICT (device_id) DO UPDATE SET
+              versions = versions + 1,
+              paths = paths + NOT EXISTS (
+                SELECT 1 FROM file_versions WHERE device_id = NEW.device_id AND rel_path = NEW.rel_path AND id <> NEW.id
+              ),
+              last_backup = MAX(COALESCE(last_backup, ''), NEW.received_at);
+        END;
+
+        CREATE TABLE chunk_totals (
+          device_id TEXT PRIMARY KEY,
+          chunks    INTEGER NOT NULL,
+          plain     INTEGER NOT NULL,
+          stored    INTEGER NOT NULL
+        );
+        INSERT INTO chunk_totals (device_id, chunks, plain, stored)
+          SELECT device_id, COUNT(*), SUM(plain_size), SUM(box_size) FROM chunks GROUP BY device_id;
+        CREATE TRIGGER chunk_totals_add AFTER INSERT ON chunks BEGIN
+          INSERT INTO chunk_totals (device_id, chunks, plain, stored)
+            VALUES (NEW.device_id, 1, NEW.plain_size, NEW.box_size)
+            ON CONFLICT (device_id) DO UPDATE SET
+              chunks = chunks + 1, plain = plain + NEW.plain_size, stored = stored + NEW.box_size;
+        END;
+        CREATE TRIGGER chunk_totals_remove AFTER DELETE ON chunks BEGIN
+          UPDATE chunk_totals SET chunks = chunks - 1, plain = plain - OLD.plain_size, stored = stored - OLD.box_size
+            WHERE device_id = OLD.device_id;
+        END;
+      `);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  }
 
   const q = {
     addCode: db.prepare(
@@ -272,10 +355,11 @@ export function openDatabase(dataDir) {
     setLayout: db.prepare("UPDATE devices SET path_layout = ? WHERE id = ?"),
     setSettings: db.prepare("UPDATE devices SET settings = ? WHERE id = ?"),
     setAgentStatus: db.prepare("UPDATE devices SET agent_status = ? WHERE id = ?"),
-    storageStats: db.prepare(`
-      SELECT device_id, COUNT(*) AS chunks, SUM(plain_size) AS plain, SUM(box_size) AS stored
-      FROM chunks GROUP BY device_id
-    `),
+    storageStats: db.prepare("SELECT device_id, chunks, plain, stored FROM chunk_totals"),
+    versionStats: db.prepare("SELECT device_id, versions, paths, last_backup FROM version_totals"),
+    quarantineCount: db.prepare("SELECT COUNT(*) AS n FROM file_versions WHERE status = 'quarantined'"),
+    listFolder: db.prepare(folderListingSql("AND rel_path > :lo AND rel_path < :hi")),
+    listRoot: db.prepare(folderListingSql("")),
   };
 
   const now = () => new Date().toISOString();
@@ -332,6 +416,12 @@ export function openDatabase(dataDir) {
     },
     listVersions: () => q.listVersions.all(),
     storageStats: () => q.storageStats.all(),
+    versionStats: () => q.versionStats.all(),
+    quarantineCount: () => q.quarantineCount.get().n,
+    listFolder: (deviceId, folder, atIso) =>
+      folder
+        ? q.listFolder.all({ device: deviceId, lo: `${folder}/`, hi: `${folder}0`, at: atIso ?? null, cut: [...folder].length + 2 }) // SQLite counts characters, not UTF-16 units
+        : q.listRoot.all({ device: deviceId, at: atIso ?? null, cut: 1 }),
 
     // All versions of one file, or of every file inside a folder ("" = everything)
     versionsUnder: (deviceId, relPath) => {

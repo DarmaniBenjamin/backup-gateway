@@ -70,10 +70,6 @@ export function openAdminStore(dataDir) {
     setSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
 
     // Dashboard queries
-    versionStats: db.prepare(`
-      SELECT device_id, COUNT(*) AS versions, COUNT(DISTINCT rel_path) AS paths, MAX(received_at) AS last_backup
-      FROM file_versions GROUP BY device_id
-    `),
     activitySince: db.prepare(`
       SELECT rel_path, version_no, type, size, received_at, status FROM file_versions
       WHERE device_id = ? AND received_at >= ? ORDER BY received_at
@@ -122,7 +118,6 @@ export function openAdminStore(dataDir) {
     },
     setSetting: (key, value) => q.setSetting.run(key, JSON.stringify(value)),
 
-    versionStats: () => q.versionStats.all(),
     activitySince: (deviceId, sinceIso) => q.activitySince.all(deviceId, sinceIso),
     versionsOfFile: (deviceId, relPath) => q.versionsOfFile.all(deviceId, relPath),
 

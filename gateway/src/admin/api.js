@@ -81,9 +81,10 @@ function deviceStatus(device) {
 }
 
 export function createAdminApi({ db, store, keys, storage, config, broker, installs, offsite }) {
-  function publicDevice(d, stats) {
+  const listingCache = new Map(); // folder listings, see GET /devices/:id/files
+  function publicDevice(d, stats, storageRows = db.storageStats()) {
     const s = stats?.find((x) => x.device_id === d.id);
-    const storageRow = db.storageStats().find((x) => x.device_id === d.id);
+    const storageRow = storageRows.find((x) => x.device_id === d.id);
     return {
       id: d.id,
       name: d.device_name,
@@ -170,7 +171,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     },
 
     "GET /overview"() {
-      const stats = store.versionStats();
+      const stats = db.versionStats();
+      const storageRows = db.storageStats();
       // Last 24 hours of changes per device, in 2-hour slots, for the activity bars on each device card
       const SLOT_MS = 2 * 3600 * 1000;
       const start = Date.now() - 12 * SLOT_MS;
@@ -180,9 +182,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
           const slot = activity[Math.min(11, Math.floor((new Date(r.received_at) - start) / SLOT_MS))];
           if (slot) r.status === "ok" ? slot.ok++ : slot.held++;
         }
-        return { ...publicDevice(d, stats), activity };
+        return { ...publicDevice(d, stats, storageRows), activity };
       });
-      const storageRows = db.storageStats();
       return {
         devices: {
           total: devices.length,
@@ -190,7 +191,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
           offline: devices.filter((d) => !d.online).length,
           frozen: devices.filter((d) => d.status === "frozen").length,
         },
-        quarantined: db.listQuarantine(10000).length,
+        quarantined: db.quarantineCount(),
         openAlerts: db.openAlertCount(),
         files: stats.reduce((n, s) => n + s.paths, 0),
         versions: stats.reduce((n, s) => n + s.versions, 0),
@@ -206,8 +207,9 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     },
 
     "GET /devices"() {
-      const stats = store.versionStats();
-      return db.listDevices().map((d) => publicDevice(d, stats));
+      const stats = db.versionStats();
+      const storageRows = db.storageStats();
+      return db.listDevices().map((d) => publicDevice(d, stats, storageRows));
     },
 
     // With a platform: also makes a one-line install command that carries the code and settings
@@ -234,49 +236,48 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       const at = query.at ? new Date(query.at) : null;
       if (at && Number.isNaN(at.getTime())) throw new ApiError(400, "Bad date");
 
-      const latest = new Map();
-      const counts = new Map();
-      for (const row of db.versionsUnder(device.id, folder)) {
-        if (at && new Date(row.received_at) > at) continue;
-        latest.set(row.rel_path, row);
-        counts.set(row.rel_path, (counts.get(row.rel_path) ?? 0) + 1);
-      }
+      // Counted by the database, one row per file or sub-folder at this level. Big folders take a
+      // moment to count, so the answer is kept until the device sends a new version or a quarantined
+      // file is released or rejected.
+      const stamp = `${db.versionStats().find((x) => x.device_id === device.id)?.versions ?? 0}|${db.quarantineCount()}|${device.path_layout}`;
+      const cacheKey = `${device.id}|${folder}|${at?.toISOString() ?? ""}`;
+      const cached = listingCache.get(cacheKey);
+      if (cached?.stamp === stamp) return cached.result;
 
-      const prefix = folder ? `${folder}/` : "";
-      const folders = new Map();
+      const folders = [];
       const files = [];
-      for (const row of latest.values()) {
-        if (folder && row.rel_path === folder) continue; // `folder` is actually a file
-        const rest = row.rel_path.slice(prefix.length);
-        const slash = rest.indexOf("/");
-        if (slash === -1) {
+      for (const row of db.listFolder(device.id, folder, at?.toISOString())) {
+        if (row.is_folder) {
+          folders.push({
+            name: row.name,
+            path: folder ? `${folder}/${row.name}` : row.name,
+            files: row.files,
+            size: row.total_size,
+            deletedFiles: row.deleted_files,
+          });
+        } else {
           files.push({
-            name: rest,
+            name: row.name,
             path: row.rel_path,
             deleted: row.type === "deleted",
             versionNo: row.version_no,
-            versionCount: counts.get(row.rel_path),
+            versionCount: row.version_count,
             size: row.size,
             backedUpAt: row.received_at,
           });
-        } else {
-          const name = rest.slice(0, slash);
-          const f = folders.get(name) ?? { name, path: prefix + name, files: 0, size: 0, deletedFiles: 0 };
-          if (row.type === "deleted") f.deletedFiles++;
-          else {
-            f.files++;
-            f.size += row.size ?? 0;
-          }
-          folders.set(name, f);
         }
       }
-      return {
+      const result = {
         device: { id: device.id, name: device.device_name, client: device.client_name },
         path: folder,
         at: at?.toISOString() ?? null,
-        folders: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name)),
+        folders: folders.sort((a, b) => a.name.localeCompare(b.name)),
         files: files.sort((a, b) => a.name.localeCompare(b.name)),
       };
+      listingCache.delete(cacheKey);
+      listingCache.set(cacheKey, { stamp, result });
+      if (listingCache.size > 100) listingCache.delete(listingCache.keys().next().value); // oldest first
+      return result;
     },
 
     "GET /devices/:id/versions"({ params, query }) {
