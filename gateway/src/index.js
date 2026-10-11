@@ -9,6 +9,8 @@ import { createStorage } from "./storage.js";
 import { createServer } from "./server.js";
 import { createGuard } from "./guard.js";
 import { createBroker } from "./broker.js";
+import { buildAgentPackage } from "./agent-package.js";
+import { createInstalls } from "./installs.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -28,8 +30,16 @@ const store = openAdminStore(config.dataDir);
 
 const guard = createGuard({ db, config });
 const broker = createBroker();
-const server = createServer({ db, keys, storage, guard, broker });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker });
+let agentPackage = null;
+try {
+  agentPackage = buildAgentPackage(config.agentDir);
+} catch (err) {
+  log.warn(`Could not pack the agent for one-line installs: ${err.message}`);
+}
+if (!agentPackage) log.warn(`Agent folder not found at ${config.agentDir}: one-line installs are off (set GATEWAY_AGENT_DIR)`);
+const installs = createInstalls({ config, store, agentPackage });
+const server = createServer({ db, keys, storage, guard, broker, installs });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs });
 
 function onListenError(name, port) {
   return (err) => {
@@ -47,6 +57,7 @@ adminServer.on("error", onListenError("Admin UI", config.adminPort));
 server.listen(config.port, config.host, () => {
   log.info(`Agent API listening on http://${config.host}:${config.port}`);
   log.info(`${db.listDevices().length} device(s) enrolled`);
+  if (agentPackage) log.info(`Agent ${agentPackage.version} ready for one-line installs`);
 });
 adminServer.listen(config.adminPort, config.adminHost, () => {
   log.info(`Admin UI listening on http://${config.adminHost}:${config.adminPort}`);

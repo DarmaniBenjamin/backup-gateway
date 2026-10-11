@@ -5,7 +5,8 @@
 //   GET  /admin/api/me
 //   GET  /admin/api/overview                  dashboard numbers
 //   GET  /admin/api/devices
-//   POST /admin/api/enrollment-codes          { clientName } -> one-time code (shown once)
+//   POST /admin/api/enrollment-codes          { clientName, platform?, allowed?, deviceName?, watch? }
+//                                             -> one-time code (shown once) + one-line install command
 //   GET  /admin/api/devices/:id/files         ?path=folder&at=ISO-date   browse backed-up files
 //   GET  /admin/api/devices/:id/versions      ?path=file                 every version of one file
 //   GET  /admin/api/devices/:id/activity      ?hours=24&bucket=15        changes over time (spot attacks)
@@ -34,6 +35,7 @@ import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js"
 import { runVerify } from "../verify.js";
 import { verifyPassword, burnTime } from "./passwords.js";
 import { REASON_TEXT, describeContent, isText } from "../inspect.js";
+import { cleanInstallOptions } from "../installs.js";
 import { chunkId as makeChunkId, open } from "../crypto-box.js";
 import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
@@ -70,7 +72,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs }) {
   function publicDevice(d, stats) {
     const s = stats?.find((x) => x.device_id === d.id);
     const storageRow = db.storageStats().find((x) => x.device_id === d.id);
@@ -200,12 +202,19 @@ export function createAdminApi({ db, store, keys, storage, config, broker }) {
       return db.listDevices().map((d) => publicDevice(d, stats));
     },
 
+    // With a platform: also makes a one-line install command that carries the code and settings
     "POST /enrollment-codes"({ body, admin, ip }) {
       try {
+        const options = body.platform ? cleanInstallOptions(body) : null;
+        if (options && !installs?.available) {
+          throw new ApiError(409, "One-line installs are off: the gateway can't find the agent folder (see its log).");
+        }
         const { code, clientName, expiresAt } = createEnrollmentCode(db, body.clientName, config.codeTtlMinutes);
-        store.audit(admin.username, "enrollment-code.created", { clientName }, ip);
-        return { code, clientName, expiresAt };
+        const install = options ? installs.create({ code, clientName, expiresAt, options }) : null;
+        store.audit(admin.username, options ? "install-link.created" : "enrollment-code.created", { clientName, platform: options?.platform }, ip);
+        return { code, clientName, expiresAt, install };
       } catch (err) {
+        if (err instanceof ApiError) throw err;
         throw new ApiError(400, err.message);
       }
     },

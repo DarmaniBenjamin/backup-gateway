@@ -106,8 +106,8 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-export function createAdminServer({ db, store, keys, storage, config, broker }) {
-  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker });
+export function createAdminServer({ db, store, keys, storage, config, broker, installs }) {
+  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs });
 
   return http.createServer(async (req, res) => {
     const ip = req.socket.remoteAddress;

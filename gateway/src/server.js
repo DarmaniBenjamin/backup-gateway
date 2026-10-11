@@ -80,6 +80,15 @@ function sendBinary(res, status, buffer) {
   res.end(buffer);
 }
 
+function sendText(res, status, text) {
+  res.writeHead(status, {
+    "Content-Type": "text/x-shellscript; charset=utf-8",
+    "Content-Length": Buffer.byteLength(text),
+    "Cache-Control": "no-store",
+  });
+  res.end(text);
+}
+
 function send(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -129,7 +138,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker }) {
+export function createServer({ db, keys, storage, guard, broker, installs }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -174,6 +183,7 @@ export function createServer({ db, keys, storage, guard, broker }) {
     }
 
     log.info(`Enrolled device "${deviceName}" for client "${record.client_name}" as ${deviceId} from ${ip}`);
+    installs?.codeUsed(codeHash); // its install link has done its job
     return send(res, 201, { deviceId, clientName: record.client_name });
   }
 
@@ -478,13 +488,27 @@ export function createServer({ db, keys, storage, guard, broker }) {
     const ip = req.socket.remoteAddress;
     try {
       const url = req.url;
+      let match;
 
       if (req.method === "POST" && url === "/api/enroll") {
         return await handleEnroll(req, res, await readBody(req, LIMIT_SMALL), ip);
       }
 
+      // One-line installs: the link's secret token is the only key (see installs.js)
+      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/(linux)\.sh$/))) {
+        const script = installs?.script(match[1], match[2], ip);
+        // (sent as a normal reply so curl passes the message on to bash instead of failing silently)
+        if (!script) return sendText(res, 200, "echo 'This install link has expired or was already used. Create a new one in the web UI (Devices → Add device).' >&2; exit 1\n");
+        return sendText(res, 200, script);
+      }
+      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/agent\.tar\.gz$/))) {
+        const pkg = installs?.package(match[1]);
+        if (!pkg) return send(res, 404, { error: "Not found" });
+        return sendBinary(res, 200, pkg);
+      }
+
       // Everything below requires a signed request from an enrolled device
-      let route, limit, chunkIdParam, jobIdParam, match;
+      let route, limit, chunkIdParam, jobIdParam;
       if (req.method === "POST" && url === "/api/heartbeat") [route, limit] = ["heartbeat", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/key-exchange") [route, limit] = ["kx", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/chunks/check") [route, limit] = ["check", LIMIT_SMALL * 2];

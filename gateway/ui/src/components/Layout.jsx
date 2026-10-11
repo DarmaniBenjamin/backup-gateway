@@ -119,7 +119,7 @@ export default function Layout() {
             {openAlerts > 0 && (
               <Link
                 to="/quarantine"
-                className="flex h-8 items-center gap-1.5 rounded-full border border-alert/40 bg-alert/15 px-3 text-xs font-medium text-alert hover:bg-alert/25"
+                className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-alert/40 bg-alert/15 px-3 text-xs font-medium text-alert hover:bg-alert/25"
               >
                 <ShieldAlert size={14} aria-hidden="true" />
                 {openAlerts} alert{openAlerts === 1 ? "" : "s"}

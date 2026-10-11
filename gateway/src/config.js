@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 function portSetting(name, fallback) {
   const port = Number(process.env[name] || fallback);
@@ -9,6 +10,21 @@ function portSetting(name, fallback) {
     throw new Error(`${name} must be a number between 1 and 65535 (got "${process.env[name]}")`);
   }
   return port;
+}
+
+function publicUrlSetting() {
+  const value = process.env.GATEWAY_PUBLIC_URL?.trim().replace(/\/+$/, "");
+  if (!value) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`GATEWAY_PUBLIC_URL is not a valid address: ${value}`);
+  }
+  if (!["http:", "https:"].includes(url.protocol) || /[\s"'`$\\;]/.test(value)) {
+    throw new Error(`GATEWAY_PUBLIC_URL must look like http://192.168.1.10:8080 (got ${value})`);
+  }
+  return value;
 }
 
 export function loadConfig() {
@@ -23,6 +39,15 @@ export function loadConfig() {
     // Admin web UI + API — for you only. Keep it on 127.0.0.1 or a management VLAN, never the internet.
     adminHost: process.env.GATEWAY_ADMIN_HOST?.trim() || "127.0.0.1",
     adminPort: portSetting("GATEWAY_ADMIN_PORT", 8090),
+
+    // The address devices use to reach the agent API, e.g. http://192.168.1.10:8080 — used in the
+    // one-line install command. Empty = worked out from GATEWAY_HOST.
+    publicUrl: publicUrlSetting(),
+
+    // The agent's folder (code + installers), packed for one-line installs. Default: ../agent
+    agentDir: path.resolve(
+      process.env.GATEWAY_AGENT_DIR?.trim() || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "agent")
+    ),
 
     dataDir,
     codeTtlMinutes: Number(process.env.GATEWAY_CODE_TTL_MINUTES || 60),

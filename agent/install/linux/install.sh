@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Installs (or upgrades) the backup agent on a Linux PC or server as a systemd service.
 #
-# First install:
+# Usually you don't run this by hand: "Add device" in the web UI gives a one-line command that
+# downloads the agent from the gateway and runs this with everything filled in.
+#
+# By hand, first install:
 #   sudo ./install.sh --gateway http://192.168.1.10:8080 --code ABCD-EFGH-JKLM --allowed "/home;/srv/shared"
 # Upgrade (keeps the settings and the device's identity): run it again from a newer copy:
 #   sudo ./install.sh
@@ -338,6 +341,7 @@ rm -rf "$PREFIX/app.old"
 [ -d "$PREFIX/app" ] && mv "$PREFIX/app" "$PREFIX/app.old"
 mv "$STAGE" "$PREFIX/app"
 rm -rf "$PREFIX/app.old"
+install -m 0755 "$SRC/install/linux/uninstall.sh" "$PREFIX/uninstall.sh"
 
 # The data folder from an earlier install keeps its keys: make sure it belongs to the agent user
 if [ -d "$DATA_DIR" ]; then chown -R "$APP_USER:$APP_USER" "$DATA_DIR"; chmod 0700 "$DATA_DIR"; fi
@@ -382,4 +386,4 @@ bold "Done. The agent runs in the background and starts with the computer."
 echo "  Status:     systemctl status $SERVICE"
 echo "  Live log:   journalctl -u $SERVICE -f"
 echo "  Folders:    add or remove them from the gateway's web UI (Devices → this device)"
-echo "  Uninstall:  sudo $(dirname "${BASH_SOURCE[0]}")/uninstall.sh"
+echo "  Uninstall:  sudo $PREFIX/uninstall.sh"

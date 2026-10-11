@@ -112,7 +112,7 @@ export default function Devices() {
         <div className="rounded-lg border border-dashed border-edge px-6 py-12 text-center">
           <p className="font-medium">No devices yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-dim">
-            Create an enrollment code, then start the agent on the client&rsquo;s NAS or PC with that code.
+            Click Add device, pick the kind of device, and paste the one command it gives you on that device.
           </p>
           <div className="mt-5">{addButton}</div>
         </div>
