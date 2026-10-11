@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hashFile } from "./hasher.js";
 import { isIgnored } from "./ignore.js";
+import { isLockedError } from "./snapshot.js";
 import { log } from "./logger.js";
 
 // "*.mp4" / "Cache" / "~*" -> a case-insensitive regular expression matching one file or folder name
@@ -32,7 +33,7 @@ function splitExcludes(excludes) {
   return { patterns: names, subPaths: paths };
 }
 
-export function createTracker(db, onChange) {
+export function createTracker(db, onChange, { snapshots = null } = {}) {
   let folders = []; // [{ id, name, path, excludes, patterns }]
 
   // The backup folder an absolute path is in (or null)
@@ -91,9 +92,19 @@ export function createTracker(db, onChange) {
     try {
       sha256 = await hashFile(absPath);
     } catch (err) {
-      // File vanished or is locked while we were reading it; the next event/scan will catch it
-      log.warn(`Could not read ${relPath}: ${err.code || err.message}`);
-      return;
+      // Locked by the program using it (Windows): read it from a shadow copy of the drive instead
+      if (isLockedError(err) && snapshots?.enabled) {
+        try {
+          sha256 = await snapshots.withSnapshotPath(absPath, (p) => hashFile(p));
+        } catch (snapErr) {
+          log.warn(`Could not read ${relPath}: it's in use (${snapErr.message})`);
+          return;
+        }
+      } else {
+        // File vanished or is locked while we were reading it; the next event/scan will catch it
+        log.warn(`Could not read ${relPath}: ${err.code || err.message}`);
+        return;
+      }
     }
 
     db.saveFile(relPath, stats.size, stats.mtimeMs, sha256);

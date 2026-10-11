@@ -36,12 +36,22 @@ command for PowerShell or Command Prompt run as Administrator. All three do the 
 the agent goes to `C:\Program Files\BackupAgent`, its settings and keys to `C:\ProgramData\BackupAgent`
 (SYSTEM and Administrators only), and it runs as a background task that starts with Windows. To remove
 it: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\BackupAgent\uninstall.ps1"` (add
-`-Purge` to also delete the device's identity).
+`-Purge` to also delete the device's identity). Files that another program keeps locked (Outlook
+`.pst`, QuickBooks, Access databases) are read from a Volume Shadow Copy of the drive, which the agent
+takes when it needs one and removes a few minutes later.
 
 On Linux the agent runs as a service (`backup-agent`) under its own user, not root. It can read any
 file so it can back it up, but can only write inside the allowed folders (for restores), and the rest
 of the system is read-only to it. To remove it: `sudo /opt/backup-agent/uninstall.sh` (add `--purge`
-to also delete the device's identity). Mac and Synology installers are coming.
+to also delete the device's identity).
+
+**Synology NAS (DSM 7 or newer):** turn on SSH (Control Panel > Terminal & SNMP), connect with an
+administrator account and paste the command. Allowed folders are shared folders, like
+`/volume1/Clients`. Everything goes on the data volume in `/volumeN/@backup-agent` (not a shared
+folder, and DSM updates leave it alone): the agent, Node.js (Package Center's Node.js v22 is used if
+it's installed), settings, keys and the log. If a big DSM update removes the service, run
+`sudo /volume1/@backup-agent/app/install/synology/install.sh` to put it back; `uninstall.sh` next to
+it removes the agent (add `--purge` to also delete its identity). A Mac installer is coming.
 
 ## Off-site copy (Backblaze B2 and other S3 storage)
 

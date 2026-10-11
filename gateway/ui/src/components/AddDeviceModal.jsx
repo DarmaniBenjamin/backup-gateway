@@ -14,7 +14,7 @@ const PLATFORMS = [
   { id: "linux", label: "Linux PC or server", note: "Ubuntu, Debian, Fedora, Arch… with systemd", icon: Server },
   { id: "windows", label: "Windows PC or server", note: "Windows 10/11, Server 2016+", icon: Monitor },
   { id: "mac", label: "Mac", note: "Coming soon", icon: Laptop, soon: true },
-  { id: "synology", label: "Synology NAS", note: "Coming soon", icon: HardDrive, soon: true },
+  { id: "synology", label: "Synology NAS", note: "DSM 7 or newer, over SSH", icon: HardDrive },
   { id: "manual", label: "Just the code", note: "Set the agent up by hand", icon: KeyRound },
 ];
 
@@ -22,6 +22,17 @@ const PLATFORMS = [
 const EXAMPLES = {
   linux: { allowed: "/home", allowedMany: "/home;/srv/shared", watch: "/home/anna/Documents" },
   windows: { allowed: "C:\\Users", allowedMany: "C:\\Users;D:\\Shared", watch: "C:\\Users\\Anna\\Documents" },
+  synology: { allowed: "/volume1/Clients", allowedMany: "/volume1/Clients;/volume1/homes", watch: "/volume1/Clients/Accounts" },
+};
+
+// What to do with the command, for each kind of device
+const HOW_TO = {
+  windows:
+    "Open PowerShell or Command Prompt as Administrator (right-click > Run as administrator) and paste. It downloads the agent from this gateway, checks it, installs it as a background task that starts with Windows, and connects.",
+  synology:
+    "On the NAS, turn on SSH (Control Panel > Terminal & SNMP > Enable SSH service), then connect with an administrator account (e.g. ssh admin@192.168.1.20) and paste. It asks for that account\u2019s password (sudo), then downloads the agent from this gateway, checks it, installs it as a service that starts with the NAS, and connects. You can turn SSH off again afterwards.",
+  linux:
+    "It asks for the device\u2019s password (sudo), then downloads the agent from this gateway, checks it, installs it as a background service that starts with the computer, and connects.",
 };
 
 function CopyBox({ id, text, label, large = false }) {
@@ -108,7 +119,13 @@ function Result({ result, onClose }) {
             </>
           )}
           <h3 className="mt-5 font-display text-sm font-semibold text-fg">
-            {install.platform === "windows" ? (install.setupUrl ? "Or paste one command" : "Paste one command on the new PC") : "Paste this in a terminal on the new device"}
+            {install.platform === "windows"
+              ? install.setupUrl
+                ? "Or paste one command"
+                : "Paste one command on the new PC"
+              : install.platform === "synology"
+                ? "Paste this in an SSH session on the NAS"
+                : "Paste this in a terminal on the new device"}
           </h3>
           {install.commands.map((c) => (
             <div key={c.id} className="mt-2">
@@ -117,9 +134,7 @@ function Result({ result, onClose }) {
             </div>
           ))}
           <p className="mt-3 text-sm text-dim">
-            {install.platform === "windows"
-              ? "Open PowerShell or Command Prompt as Administrator (right-click > Run as administrator) and paste. It downloads the agent from this gateway, checks it, installs it as a background task that starts with Windows, and connects."
-              : "It asks for the device\u2019s password (sudo), then downloads the agent from this gateway, checks it, installs it as a background service that starts with the computer, and connects."}{" "}
+            {HOW_TO[install.platform] ?? HOW_TO.linux}{" "}
             The device shows up here within a minute.
           </p>
           {install.localOnly && (

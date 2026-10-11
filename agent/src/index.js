@@ -10,6 +10,7 @@ import { createUploader } from "./uploader.js";
 import { createRestorer } from "./restorer.js";
 import { createFolderManager } from "./folders.js";
 import { createPolicy } from "./policy.js";
+import { createSnapshots } from "./snapshot.js";
 import { log } from "./logger.js";
 
 const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -33,6 +34,10 @@ try {
 log.info(`Backup agent v${version} starting on device "${config.deviceName}"`);
 const db = openDatabase(config.dataDir);
 
+// Windows: files locked by the program using them are read from a shadow copy of the drive
+const snapshots = createSnapshots({ dataDir: config.dataDir });
+await snapshots.cleanupLeftovers().catch((err) => log.warn(`Shadow copy cleanup: ${err.message}`));
+
 let uploader = null;
 
 const tracker = createTracker(db, (change) => {
@@ -40,7 +45,7 @@ const tracker = createTracker(db, (change) => {
   const hash = change.sha256 ? `  sha256:${change.sha256.slice(0, 12)}…` : "";
   log.info(`${change.type.padEnd(8)} ${change.relPath}${size}${hash}`);
   uploader?.trigger();
-});
+}, { snapshots });
 
 // Process one path at a time, in order, so checks never overlap
 let queue = Promise.resolve();
@@ -87,7 +92,7 @@ if (connection) {
   connection.onFoldersVersion((v) => folders.checkVersion(v));
   connection.onBrowse((request) => folders.answerBrowse(request));
   folders.whenSynced(() => {
-    uploader = createUploader({ db, tracker, connection, policy });
+    uploader = createUploader({ db, tracker, connection, policy, snapshots });
     uploader.trigger();
   });
   await folders.sync();
@@ -106,6 +111,7 @@ async function shutdown(signal) {
   connection?.stop();
   await watcher.close();
   await queue;
+  await snapshots.closeAll().catch(() => {});
   db.close();
   process.exit(0);
 }

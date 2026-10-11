@@ -13,6 +13,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import { readChunks } from "./chunker.js";
 import { chunkId, seal } from "./crypto-box.js";
+import { isLockedError } from "./snapshot.js";
 import { log } from "./logger.js";
 
 const CHECK_BATCH = 1000;
@@ -27,7 +28,7 @@ function formatSize(bytes) {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
-export function createUploader({ db, tracker, connection, policy }) {
+export function createUploader({ db, tracker, connection, policy, snapshots = null }) {
   const { client, auth } = connection;
   let running = false;
   let again = false;
@@ -49,11 +50,28 @@ export function createUploader({ db, tracker, connection, policy }) {
       throw err;
     }
 
+    try {
+      return await sendFrom(absPath, change, keys, stats);
+    } catch (err) {
+      if (!isLockedError(err)) throw err;
+      if (!snapshots?.enabled) return { skipped: `it's in use by another program (${err.code})`, inUse: true };
+      // Locked by the program using it (Windows): send it from a shadow copy of the drive instead
+      try {
+        return await snapshots.withSnapshotPath(absPath, (p) => sendFrom(p, change, keys, stats));
+      } catch (snapErr) {
+        if (snapErr instanceof FileChangedError || snapErr.status || snapErr.cause) throw snapErr;
+        return { skipped: `it's in use and couldn't be read from a shadow copy (${snapErr.message}); it's tried again on the next change or scan`, inUse: true };
+      }
+    }
+  }
+
+  // Reads the file from `readPath` (the file itself, or its copy in a shadow copy) and sends it
+  async function sendFrom(readPath, change, keys, stats) {
     // Pass 1: fingerprint every chunk and the whole file
     const ids = [];
     const fileHash = crypto.createHash("sha256");
     let size = 0;
-    for await (const data of readChunks(absPath)) {
+    for await (const data of readChunks(readPath)) {
       ids.push(chunkId(keys.idKey, data));
       fileHash.update(data);
       size += data.length;
@@ -72,7 +90,7 @@ export function createUploader({ db, tracker, connection, policy }) {
     let index = 0;
     let sentBytes = 0;
     const uploaded = new Set();
-    for await (const data of readChunks(absPath)) {
+    for await (const data of readChunks(readPath)) {
       const id = chunkId(keys.idKey, data);
       if (id !== ids[index]) throw new FileChangedError(); // file was edited while we were uploading it
       if (missing.has(id) && !uploaded.has(id)) {
@@ -120,6 +138,12 @@ export function createUploader({ db, tracker, connection, policy }) {
       const r = await uploadFile(change, keys);
       if (r.skipped) {
         db.setChangeStatus(change.id, "skipped");
+        if (r.inUse) {
+          // Forget it for now, so the next scan finds it again and sends it once it can be read
+          db.removeFile(change.rel_path);
+          log.warn(`skipped  ${change.rel_path}: ${r.skipped}`);
+          return;
+        }
         log.debug(`skipped  ${change.rel_path}: ${r.skipped}`);
         return;
       }

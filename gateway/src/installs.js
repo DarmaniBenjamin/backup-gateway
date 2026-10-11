@@ -5,6 +5,7 @@
 // settings.
 //
 //   Linux:    (curl … || wget …) | sudo bash              -> linux.sh  -> agent.tar.gz
+//   Synology: the same, over SSH on the NAS                 -> synology.sh -> agent.tar.gz
 //   Windows:  irm … | iex  (PowerShell or Command Prompt) -> windows.ps1 -> agent.zip
 //             or BackupAgentSetup.exe (the same, double-clickable; the link is added to its end)
 //
@@ -16,7 +17,7 @@ import os from "node:os";
 import { hashCode } from "./codes.js";
 import { log } from "./logger.js";
 
-export const PLATFORMS = ["linux", "windows"];
+export const PLATFORMS = ["linux", "windows", "synology"];
 
 export class InstallError extends Error {}
 
@@ -24,6 +25,7 @@ export class InstallError extends Error {}
 // characters (bash). Windows: backslashes are fine (PowerShell single quotes), the rest isn't.
 const SAFE = {
   linux: /^[^'"\\$`\u0000-\u001f\u007f]*$/,
+  synology: /^[^'"\\$`\u0000-\u001f\u007f]*$/,
   windows: /^[^'"$`\u0000-\u001f\u007f]*$/,
 };
 
@@ -32,6 +34,16 @@ const PATHS = {
     example: "/home",
     isFull: (p) => p.startsWith("/"),
     isRoot: (p) => p === "/",
+    trim: (p) => (p.length > 1 ? p.replace(/\/+$/, "") : p),
+    inside: (child, parent) => child === parent || child.startsWith(`${parent}/`),
+  },
+  // Shared folders (or folders inside them) on a data volume; never a whole volume or DSM's own
+  // @ and # folders
+  synology: {
+    example: "/volume1/Clients",
+    notFull: "Allowed folders must be shared folders (or folders inside them) on a volume, like /volume1/Clients",
+    isFull: (p) => /^\/volume[0-9]+\/[^/@#]/.test(p),
+    isRoot: (p) => /^\/volume[0-9]+\/?$/.test(p),
     trim: (p) => (p.length > 1 ? p.replace(/\/+$/, "") : p),
     inside: (child, parent) => child === parent || child.startsWith(`${parent}/`),
   },
@@ -58,8 +70,8 @@ function cleanPathList(value, platform) {
   if (list.length === 0) throw new InstallError(`Enter at least one allowed folder, e.g. ${rules.example}`);
   if (list.length > 20) throw new InstallError("At most 20 allowed folders.");
   for (const p of list) {
-    if (!rules.isFull(p)) throw new InstallError(`Allowed folders must be full paths, like ${rules.example}: ${p}`);
     if (rules.isRoot(p)) throw new InstallError(`A whole drive (${p}) can't be allowed. List the folders with data instead, e.g. ${rules.example}`);
+    if (!rules.isFull(p)) throw new InstallError(`${rules.notFull ?? `Allowed folders must be full paths, like ${rules.example}`}: ${p}`);
     if (p.length > 500 || !SAFE[platform].test(p)) throw new InstallError(`This folder name can't be used: ${p}`);
   }
   return list.join(";");
@@ -145,6 +157,51 @@ main "$@"
 `;
 }
 
+// The same as Linux, with the Synology installer (DSM 7: Node.js and everything else go on the data
+// volume, which DSM updates leave alone)
+function synologyScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
+  const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
+  const args = [`--gateway ${q(gatewayUrl)}`, `--code ${q(code)}`, `--allowed ${q(options.allowed)}`];
+  if (options.name) args.push(`--name ${q(options.name)}`);
+  if (options.watch) args.push(`--watch ${q(options.watch)}`);
+  return `#!/bin/bash
+# Backup agent install for ${cleanName(clientName)} (Synology NAS), made by the backup gateway.
+# Works once, until ${expiresAt.toISOString()}.
+set -euo pipefail
+
+main() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Run it with sudo: the command shown in the web UI ends with | sudo bash" >&2
+    exit 1
+  fi
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  echo "Downloading the backup agent from the gateway..."
+  if command -v curl >/dev/null; then
+    curl -fsSL ${q(pkgUrl)} -o "$tmp/agent.tar.gz"
+  else
+    wget -qO "$tmp/agent.tar.gz" ${q(pkgUrl)}
+  fi
+  # Only run the package if it's exactly the one the gateway made
+  if command -v sha256sum >/dev/null; then
+    sum=$(sha256sum "$tmp/agent.tar.gz" | cut -d' ' -f1)
+  else
+    sum=$(openssl dgst -sha256 -r "$tmp/agent.tar.gz" | cut -d' ' -f1)
+  fi
+  if [ "$sum" != "${pkg.sha256}" ]; then
+    echo "The download failed its SHA-256 check. Nothing was installed." >&2
+    exit 1
+  fi
+  tar -xzf "$tmp/agent.tar.gz" -C "$tmp" --no-same-owner
+  bash "$tmp/agent/install/synology/install.sh" \\
+    ${args.join(" \\\n    ")} </dev/null
+}
+
+main "$@"
+`;
+}
+
 // Run with "irm … | iex", so it never calls exit (that would close the person's PowerShell
 // window); the real installer runs as its own powershell.exe and reports back with its exit code.
 function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options }) {
@@ -186,7 +243,7 @@ function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, op
 `;
 }
 
-const SCRIPTS = { linux: linuxScript, windows: windowsScript };
+const SCRIPTS = { linux: linuxScript, windows: windowsScript, synology: synologyScript };
 const SETUP_MAGIC = Buffer.from("BGSETUP1");
 
 export function createInstalls({ config, store, agentPackage, windowsSetup }) {
@@ -202,7 +259,8 @@ export function createInstalls({ config, store, agentPackage, windowsSetup }) {
     return typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token) ? links.get(token) : undefined;
   }
 
-  const scriptUrl = (base, token, platform) => `${base}/install/${token}/${platform === "windows" ? "windows.ps1" : "linux.sh"}`;
+  const SCRIPT_FILES = { linux: "linux.sh", windows: "windows.ps1", synology: "synology.sh" };
+  const scriptUrl = (base, token, platform) => `${base}/install/${token}/${SCRIPT_FILES[platform]}`;
 
   return {
     available: Boolean(agentPackage),
@@ -230,8 +288,8 @@ export function createInstalls({ config, store, agentPackage, windowsSetup }) {
         };
       }
       return {
-        platform: "linux",
-        commands: [{ id: "bash", label: "Terminal", command: `(curl -fsSL '${script}' || wget -qO- '${script}') | sudo bash` }],
+        platform: options.platform,
+        commands: [{ id: "bash", label: options.platform === "synology" ? "SSH" : "Terminal", command: `(curl -fsSL '${script}' || wget -qO- '${script}') | sudo bash` }],
         gatewayUrl: url,
         localOnly,
       };
