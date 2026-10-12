@@ -21,6 +21,7 @@ import { inspectFile } from "./inspect.js";
 import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js";
 import { cleanAgentStatus, settingsOf } from "./device-settings.js";
 import { log } from "./logger.js";
+import { HELLO_ID } from "./address.js";
 import { installPage, deadLinkPage, tooManyPage, PAGE_CSP } from "./install-page.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
@@ -51,6 +52,23 @@ function tooManyShortMisses(ip, miss = false) {
   if (recent.length) shortMisses.set(ip, recent);
   else shortMisses.delete(ip);
   return recent.length >= 20;
+}
+
+// The caller's address. Behind a Cloudflare Tunnel or Caddy on this same computer
+// (GATEWAY_TRUST_PROXY=1, set by deploy/install.sh), every request comes from 127.0.0.1, so the real
+// address is taken from the header they add: CF-Connecting-IP (Cloudflare) or X-Forwarded-For
+// (Caddy, which replaces whatever the caller sent). Only for requests from this computer, so nobody
+// on the network can pretend to be someone else with a header.
+const TRUST_PROXY = ["1", "true", "yes"].includes(String(process.env.GATEWAY_TRUST_PROXY ?? "").toLowerCase());
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
+function clientIp(req) {
+  const direct = req.socket.remoteAddress;
+  if (!TRUST_PROXY || !LOOPBACK.has(direct)) return direct;
+  const cf = String(req.headers["cf-connecting-ip"] ?? "").trim();
+  if (IP_RE.test(cf)) return cf;
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop();
+  return forwarded && IP_RE.test(forwarded) ? forwarded : direct;
 }
 
 function sendHtml(res, status, html) {
@@ -163,7 +181,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -554,13 +572,24 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
   }
 
   const server = http.createServer(async (req, res) => {
-    const ip = req.socket.remoteAddress;
+    const ip = clientIp(req);
     try {
       const url = req.url;
       let match;
 
       if (req.method === "POST" && url === "/api/enroll") {
         return await handleEnroll(req, res, await readBody(req, LIMIT_SMALL), ip);
+      }
+
+      // "Is this the gateway?" The Certificate page checks its address reaches this gateway (address.js)
+      if (req.method === "GET" && url === "/api/hello") return send(res, 200, { gateway: "backup-gateway", id: HELLO_ID });
+
+      // Caddy's question before it gets a certificate (address.js). Only from Caddy on this computer:
+      // requests from the internet come through Caddy with an X-Forwarded-For header.
+      if (req.method === "GET" && url.startsWith("/api/caddy/allowed?")) {
+        const local = LOOPBACK.has(req.socket.remoteAddress) && !req.headers["x-forwarded-for"] && !req.headers["cf-connecting-ip"];
+        const domain = new URLSearchParams(url.split("?")[1]).get("domain");
+        return local && address?.allowed(domain) ? send(res, 200, { allowed: true }) : send(res, 404, { allowed: false });
       }
 
       // Short install links: http://…:8080/i/K7Q2MX (see installs.js)

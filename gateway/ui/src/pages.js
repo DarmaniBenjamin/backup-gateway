@@ -11,6 +11,7 @@ export const pages = {
   Offsite: () => import("./pages/Offsite.jsx"),
   Security: () => import("./pages/Security.jsx"),
   Alerts: () => import("./pages/Alerts.jsx"),
+  Certificate: () => import("./pages/Certificate.jsx"),
 };
 
 // Fetch them all quietly once the browser is idle

@@ -20,10 +20,66 @@ const NAV = [
   { to: "/alerts", label: "Alerts" },
   { to: "/quarantine", label: "Quarantine" },
   { to: "/offsite", label: "Off-site" },
-  { to: "/jobs", label: "Jobs" },
-  { to: "/integrity", label: "Integrity" },
-  { to: "/audit", label: "Audit log" },
+  // Used less often: under More in the top bar (all listed in the phone menu)
+  { to: "/jobs", label: "Jobs", more: true },
+  { to: "/integrity", label: "Integrity", more: true },
+  { to: "/certificate", label: "Certificate", more: true },
+  { to: "/audit", label: "Audit log", more: true },
 ];
+
+// The top bar's More menu
+function MoreMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const location = useLocation();
+  const current = items.some((i) => location.pathname.startsWith(i.to));
+  useEffect(() => setOpen(false), [location.pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  return (
+    <div className="relative flex h-full" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={`relative flex h-full items-center gap-1 whitespace-nowrap px-3.5 text-sm transition-colors ${
+          current
+            ? "text-fg after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-signal"
+            : "text-dim hover:text-fg"
+        }`}
+      >
+        More
+        <ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-full z-40 mt-1 w-48 rounded-lg border border-edge bg-solid p-1.5 shadow-2xl">
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              role="menuitem"
+              className={({ isActive }) =>
+                `flex h-9 items-center rounded-md px-3 text-sm ${isActive ? "bg-raised text-fg" : "text-dim hover:bg-raised hover:text-fg"}`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function AccountMenu({ user, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -97,7 +153,7 @@ export default function Layout() {
 
   const tabClass = ({ isActive }) =>
     [
-      "relative flex h-full items-center px-3.5 text-sm transition-colors",
+      "relative flex h-full items-center whitespace-nowrap px-3.5 text-sm transition-colors",
       isActive
         ? "text-fg after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-signal"
         : "text-dim hover:text-fg",
@@ -113,11 +169,12 @@ export default function Layout() {
           </Link>
 
           <nav className="hidden h-full items-stretch lg:flex" aria-label="Main">
-            {NAV.map((item) => (
+            {NAV.filter((item) => !item.more).map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={tabClass}>
                 {item.label}
               </NavLink>
             ))}
+            <MoreMenu items={NAV.filter((item) => item.more)} />
           </nav>
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">

@@ -19,6 +19,7 @@ import { createSecurity } from "./security.js";
 import { createNotify } from "./notify/notify.js";
 import { createHealth } from "./health.js";
 import { createRemovals } from "./removals.js";
+import { createAddress } from "./address.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -56,17 +57,20 @@ const installs = createInstalls({ config, store, agentPackage, windowsSetup, upd
 const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updateKey, security });
 // Uninstalling agents from the web UI (signed with the same update key)
 const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker, store });
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals });
+// The gateway's address on the internet and its certificate (Certificate page: Caddy or a Cloudflare Tunnel)
+const address = createAddress({ dataDir: config.dataDir, config, security });
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
 // Alerts by phone push, email or webhook, and the checks for devices offline and disk space
 const notify = createNotify({ db, dataDir: config.dataDir, security });
 const health = createHealth({ db, dataDir: config.dataDir, security, settings: notify.settings, skipDevice: removals.inProgress });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address });
 copies.start();
 notify.start();
 security.start({ pendingCleared: () => copies.syncNow() });
 health.start();
+address.start();
 const removalTimer = setInterval(() => removals.tick(), 30_000);
 removalTimer.unref();
 // Removed devices deleted for good N days after they were removed, if that's on (Devices page)

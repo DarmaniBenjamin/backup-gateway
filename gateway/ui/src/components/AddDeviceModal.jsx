@@ -4,6 +4,7 @@
 // The command (and the one-time enrollment code inside it) is shown once and works once.
 
 import { useState } from "react";
+import { Link } from "react-router";
 import { Check, Copy, Download, HardDrive, KeyRound, Laptop, LoaderCircle, Monitor, Server, TriangleAlert } from "lucide-react";
 import { api } from "../api.js";
 import { formatDateTime } from "../format.js";
@@ -47,8 +48,15 @@ function OnlyHere({ network }) {
         This only works on this computer
       </p>
       <p className="mt-2 text-dim">
+        Devices at other sites: give the gateway an address on the internet on the{" "}
+        <Link to="/certificate" className="text-signal hover:underline">
+          Certificate
+        </Link>{" "}
+        page, then add the device again.
+      </p>
+      <p className="mt-2 text-dim">
         The gateway only accepts agents from this computer (127.0.0.1), so another PC, a NAS or a virtual machine can&rsquo;t reach it. To add
-        those, put these two lines in the gateway&rsquo;s .env (replacing the GATEWAY_HOST and GATEWAY_PUBLIC_URL lines there), restart the
+        those on this network, put these two lines in the gateway&rsquo;s .env (replacing the GATEWAY_HOST and GATEWAY_PUBLIC_URL lines there), restart the
         gateway, and add the device again:
       </p>
       <div className="mt-3">

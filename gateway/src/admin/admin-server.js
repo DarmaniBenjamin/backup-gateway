@@ -183,8 +183,8 @@ function serveStatic(req, res, pathname) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
-export function createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals }) {
-  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals });
+export function createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address }) {
+  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address });
   warmStatic();
 
   return http.createServer(async (req, res) => {
