@@ -185,11 +185,17 @@ function WebhookFields({ s, set, saved }) {
     <div className="space-y-4">
       <Field label="Send as">
         <select className={selectClass} value={s.format} onChange={(e) => set({ format: e.target.value })}>
-          <option value="json">JSON, for your own systems (a helpdesk)</option>
+          <option value="json">JSON, for Uplink or your own systems</option>
           <option value="slack">Slack message</option>
           <option value="discord">Discord message</option>
         </select>
       </Field>
+      {s.format === "json" && (
+        <p className="rounded-md border border-edge bg-raised/50 p-3 text-sm text-dim">
+          <span className="text-fg">Uplink:</span> in Uplink, open Integrations, turn on Backup alerts, and copy its address and secret into the
+          two boxes below (Uplink needs both). Each alert then becomes a ticket for that client, and &ldquo;back to normal&rdquo; resolves it.
+        </p>
+      )}
       <Field label="Webhook address" hint={saved ? `Saved: ${saved.settings.urlHint}. Leave empty to keep it.` : "It's treated like a password: never shown again after saving."}>
         <input className={inputClass} value={s.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://" spellCheck={false} />
       </Field>

@@ -194,7 +194,7 @@ async function post(url, body, headers = {}) {
   }
 }
 
-export async function deliver(channel, events, gatewayName) {
+export async function deliver(channel, events, gatewayName, gatewayId = null) {
   const s = channel.settings;
   const m = compose(events, gatewayName);
   if (channel.kind === "push") {
@@ -218,6 +218,8 @@ export async function deliver(channel, events, gatewayName) {
     const body = JSON.stringify({
       source: "backup-gateway",
       gateway: gatewayName,
+      // Stays the same if the gateway is renamed (Uplink tells gateways apart by it)
+      gatewayId,
       sentAt: new Date().toISOString(),
       title: m.title,
       events: events.map((e) => ({
@@ -284,6 +286,12 @@ export function createNotify({ db, dataDir, security, deliverFn = deliver }) {
   };
   const now = () => new Date().toISOString();
   const row = (r) => r && { ...r, settings: JSON.parse(r.settings), categories: JSON.parse(r.categories) };
+  // This gateway's own ID, made once, sent with webhook alerts
+  let gatewayId = q.getMeta.get("gateway_id")?.value;
+  if (!gatewayId) {
+    gatewayId = `gw_${crypto.randomBytes(12).toString("base64url")}`;
+    q.setMeta.run("gateway_id", gatewayId);
+  }
   const channels = () => q.all.all().map(row);
 
   function settings() {
@@ -341,7 +349,7 @@ export function createNotify({ db, dataDir, security, deliverFn = deliver }) {
     st.sending = true;
     const gatewayName = settings().gatewayName;
     try {
-      await deliverFn(c, batch, gatewayName);
+      await deliverFn(c, batch, gatewayName, gatewayId);
       st.sends.push(Date.now());
       st.attempt = 0;
       q.sent.run(now(), id);
@@ -420,7 +428,7 @@ export function createNotify({ db, dataDir, security, deliverFn = deliver }) {
         detail: { note: "If you can read this, alerts reach you here." },
       };
       try {
-        await deliverFn(c, [event], gatewayName);
+        await deliverFn(c, [event], gatewayName, gatewayId);
         if (id) q.sent.run(now(), id);
         q.addLog.run(now(), id, c.name, 1, 1, "Test alert", null);
       } catch (err) {
