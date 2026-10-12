@@ -25,7 +25,8 @@
 // It also uninstalls the agent when the web UI asks: request.json with action "uninstall" and an
 // order the gateway signed with the same key, naming this device (from identity.json) and less
 // than a day old. It removes the service, program, identity, keys and settings, and itself. The
-// files that were backed up on this device are never touched.
+// files that were backed up on this device are never touched. Then it tells the gateway, signed with
+// the device's key (read before it's deleted), so the web UI shows it removed straight away.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -242,14 +243,54 @@ async function uninstallWindows() {
   run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(register, "utf16le").toString("base64")]);
 }
 
+// What's needed to tell the gateway afterwards: its address, this device's ID and signing key
+function farewellDetails() {
+  try {
+    const envFile = win
+      ? path.join(path.dirname(conf.dataDir), "agent.env")
+      : conf.platform === "linux" ? "/etc/backup-agent/agent.env" : path.join(conf.prefix, "agent.env");
+    const url = fs.readFileSync(envFile, "utf8").match(/^AGENT_GATEWAY_URL=["']?([^"'\r\n]+)["']?\s*$/m)?.[1]?.replace(/\/+$/, "");
+    const deviceId = readJson(path.join(conf.dataDir, "identity.json"))?.deviceId;
+    const key = crypto.createPrivateKey(fs.readFileSync(path.join(conf.dataDir, "device-key.pem")));
+    return url && /^https?:\/\//.test(url) && deviceId ? { url, deviceId, key } : null;
+  } catch {
+    return null;
+  }
+}
+
+// A signed request, the same way the agent signs everything it sends
+async function tellGateway(details, body) {
+  if (!details) return;
+  const reqPath = "/api/goodbye";
+  const buf = Buffer.from(JSON.stringify(body));
+  const timestamp = String(Date.now());
+  const nonce = crypto.randomBytes(18).toString("base64url");
+  const hash = crypto.createHash("sha256").update(buf).digest("hex");
+  const signature = crypto.sign(null, Buffer.from(`POST\n${reqPath}\n${timestamp}\n${nonce}\n${hash}`), details.key).toString("base64");
+  try {
+    const res = await fetch(`${details.url}${reqPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Device-Id": details.deviceId, "X-Timestamp": timestamp, "X-Nonce": nonce, "X-Signature": signature },
+      body: buf,
+      signal: AbortSignal.timeout(15_000),
+    });
+    log(`Told the gateway (${res.status})`);
+  } catch (err) {
+    log(`Couldn't tell the gateway (${err.message}); it notices the device went quiet instead`);
+  }
+}
+
 async function uninstall(request) {
   let order = null;
+  let details = null;
   try {
     order = checkOrder(request);
+    details = farewellDetails();
     log(`Uninstalling the agent, as asked by ${order.by ?? "the gateway"} (order signature checked)`);
     if (win) await uninstallWindows();
     else uninstallUnix();
     console.log("The backup agent was uninstalled.");
+    await tellGateway(details, { ok: true, order: order.id });
   } catch (err) {
     log(`Uninstall failed: ${err.message}`);
     try {
@@ -258,6 +299,7 @@ async function uninstall(request) {
     } catch {
       // nothing more to do
     }
+    if (order) await tellGateway(details, { ok: false, order: order.id, error: err.message.slice(0, 300) });
   }
 }
 
