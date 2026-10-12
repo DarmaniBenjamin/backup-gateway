@@ -19,26 +19,46 @@ Client device (agent) → Gateway (versions, checks, quarantine) → Backblaze B
 ## Adding a device
 
 In the web UI, go to **Devices → Add device**, pick the client and the kind of device, and enter the
-folders it may back up. You get one command to paste in a terminal on the new device, for example:
+folders it may back up. You get a short link to type into a browser on the new device, and one
+command to paste in a terminal there, for example:
 
-```bash
-(curl -fsSL 'http://192.168.1.10:8080/install/…/linux.sh' || wget -qO- '…') | sudo bash
-```
+    http://192.168.1.10:8080/i/K7Q2MX
+    curl -fsSL http://192.168.1.10:8080/i/K7Q2MX/sh | sudo bash
 
 It downloads the agent from the gateway, checks its SHA-256, installs it as a background service and
-connects — no code or settings to type. The command works once and expires with its enrollment code.
+connects — no code or settings to type. The link works once and expires with its enrollment code
+(after 20 wrong links in 10 minutes, an address has to wait, so the 6-letter codes can't be guessed).
 For devices on other computers, set `GATEWAY_HOST=0.0.0.0` and `GATEWAY_PUBLIC_URL` in the gateway's `.env`.
 
-**Windows PCs and servers** get three choices in the same window: a setup program to download right
-there and double-click (`BackupAgentSetup.exe`, a 7 KB program that comes with the gateway; its source
-is `gateway/setup-exe/setup.c`, rebuilt with `npm run build-windows-setup`, which needs Zig), or one
-command for PowerShell or Command Prompt run as Administrator. All three do the same:
+**Windows PCs and servers** get three choices: the setup program, or one command for PowerShell or
+Command Prompt run as Administrator. All three do the same:
 the agent goes to `C:\Program Files\BackupAgent`, its settings and keys to `C:\ProgramData\BackupAgent`
 (SYSTEM and Administrators only), and it runs as a background task that starts with Windows. To remove
 it: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\BackupAgent\uninstall.ps1"` (add
 `-Purge` to also delete the device's identity). Files that another program keeps locked (Outlook
 `.pst`, QuickBooks, Access databases) are read from a Volume Shadow Copy of the drive, which the agent
 takes when it needs one and removes a few minutes later.
+
+### The Windows setup program
+
+`BackupAgentSetup.exe` comes with the gateway (source: `gateway/setup-exe/setup.c` and `setup.rc`).
+It's the same file for every device: which install it's for is in its name, set by the gateway when
+it's downloaded (`BackupAgentSetup_K7Q2MX_192.168.1.10_8080.exe`). Renamed, it asks for the short link.
+It asks for administrator rights, gets the install's details from the gateway, downloads the agent and
+checks its SHA-256, unpacks it with Windows' own `tar.exe`, and runs `install.ps1`. Nothing is added
+to the file and it doesn't run code straight from the internet, which is what antivirus programs look
+for in malware.
+
+Rebuild it after changing those files with `npm run build-windows-setup` (needs Zig:
+`sudo pacman -S zig`), then restart the gateway.
+
+Until it's code-signed, Windows SmartScreen says it "protected your PC" (More info > Run anyway), and
+some antivirus programs are wary of any new unsigned program. Signing it removes that: get a code
+signing certificate (for example Azure Trusted Signing, or a certificate from Certum, Sectigo or
+DigiCert), sign `gateway/setup-exe/BackupAgentSetup.exe`, keep the signed file there and restart the
+gateway. Every device then gets that signed file, since it's the same for everyone. If one antivirus
+still flags it, send the file to that vendor as a false positive (Microsoft:
+https://www.microsoft.com/wdsi/filesubmission).
 
 On Linux the agent runs as a service (`backup-agent`) under its own user, not root. It can read any
 file so it can back it up, but can only write inside the allowed folders (for restores), and the rest
@@ -167,6 +187,13 @@ On a device's page, **Service**:
   by the device's updater. A device with its folder lock on waits until it's unlocked with its key.
   Its backups stay on the gateway and can still be restored to another device.
 - **Remove device** cuts off a computer that's gone or broken, without uninstalling anything.
+
+Removed devices are listed at the bottom of the Devices page. **Delete for good** deletes one and its
+backups from the gateway. Or let it happen by itself: **Delete a removed device and its backups**
+(7 days to a year after it's removed, or never, the default). An alert goes out 3 days before, and
+**Keep its backups** on the device's page stops it for that device. Copies already sent off-site
+aren't deleted from the cloud: they stay until their lock runs out (and the bucket's lifecycle rule
+clears them), or, on Google Drive, until you delete the folder.
 
 ## Synology DSM settings
 
