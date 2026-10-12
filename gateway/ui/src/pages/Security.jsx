@@ -57,6 +57,8 @@ const KIND_LABEL = {
   "agent.uninstalled": "Uninstall",
   "agent.uninstall-failed": "Uninstall",
   "agent.removed": "Removed",
+  "agent.delete-soon": "Delete soon",
+  "agent.deleted": "Deleted",
   "device.offline": "Offline",
   "device.online": "Back online",
   "offsite.failing": "Off-site",

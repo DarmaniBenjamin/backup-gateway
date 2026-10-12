@@ -4,10 +4,14 @@
 // link, which downloads the agent package, checks its SHA-256 and runs the installer with those
 // settings.
 //
-//   Linux:    (curl … || wget …) | sudo bash              -> linux.sh  -> agent.tar.gz
-//   Synology: the same, over SSH on the NAS                 -> synology.sh -> agent.tar.gz
-//   Windows:  irm … | iex  (PowerShell or Command Prompt) -> windows.ps1 -> agent.zip
-//             or BackupAgentSetup.exe (the same, double-clickable; the link is added to its end)
+// Each link also has a short form, easy to type on the new device: http://192.168.1.25:8080/i/K7Q2MX
+//   /i/K7Q2MX              a page with the setup program and the command (for a browser)
+//   /i/K7Q2MX/win          the Windows install script:  irm http://…/i/K7Q2MX/win | iex
+//   /i/K7Q2MX/sh           the Linux or Synology one:   curl -fsSL http://…/i/K7Q2MX/sh | sudo bash
+//   /i/K7Q2MX/setup.exe    BackupAgentSetup.exe, named BackupAgentSetup_K7Q2MX_<host>_<port>.exe
+//   /i/K7Q2MX/setup.json   what the setup program asks for (package address, SHA-256, options)
+// The setup program is the same file for everyone (see setup-exe/setup.c): its name says which
+// install it is, so nothing is added to it and antivirus can trust it.
 //
 // Links live in memory only — the enrollment code inside them is never written to disk — and
 // stop working when their device enrolls, when their code expires, or when the gateway restarts.
@@ -20,6 +24,12 @@ import { log } from "./logger.js";
 export const PLATFORMS = ["linux", "windows", "synology"];
 
 export class InstallError extends Error {}
+
+// Short codes: no 0/O, 1/I/L, so they can't be misread or mistyped. 6 characters = 887 million,
+// and guesses are limited (server.js), while a link only lives as long as its enrollment code.
+export const SHORT_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+export const SHORT_RE = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
+const newShortCode = () => Array.from({ length: 6 }, () => SHORT_ALPHABET[crypto.randomInt(SHORT_ALPHABET.length)]).join("");
 
 // Text that ends up inside an install script. Linux: no quotes, backslashes, $ or control
 // characters (bash). Windows: backslashes are fine (PowerShell single quotes), the rest isn't.
@@ -98,6 +108,16 @@ export function cleanInstallOptions(body) {
   return { platform, allowed, fullAccess, name, watch };
 }
 
+// This computer's network addresses other devices could use (for the "only works here" message).
+// Real network cards first; Docker, VM and VPN bridges last.
+export function lanAddresses() {
+  const virtual = /^(docker|br-|veth|virbr|vmnet|vboxnet|tailscale|zt|wg|tun|tap)/i;
+  return Object.entries(os.networkInterfaces())
+    .flatMap(([name, list]) => (list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => ({ name, address: i.address, virtual: virtual.test(name) })))
+    .sort((a, b) => a.virtual - b.virtual)
+    .map(({ name, address }) => ({ name, address }));
+}
+
 // The address devices use to reach the agent API
 export function agentApiUrl(config) {
   if (config.publicUrl) return { url: config.publicUrl, localOnly: false };
@@ -118,19 +138,25 @@ export function agentApiUrl(config) {
 const q = (s) => `'${s}'`; // safe: every value was checked against SAFE for its platform
 const cleanName = (s) => s.replace(/[^\w .&()-]/g, "");
 
-// The installer's options. An upgrade (an enrolled device getting the self-updater) passes only the
-// update key: the installer keeps everything else as it is. The key is base64 (safe in quotes).
-function installerArgs({ code, options, gatewayUrl, updateKeyB64 }, win = false) {
+// The installer's options, as [option, value] pairs (value null for a switch). An upgrade (an
+// enrolled device getting the self-updater) passes only the update key: the installer keeps
+// everything else as it is. The key is base64 (safe in quotes).
+function installerOptions({ code, options, gatewayUrl, updateKeyB64 }, win = false) {
   const o = (name) => (win ? `-${name[0].toUpperCase()}${name.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase())}` : `--${name}`);
-  const args = [];
+  const opts = [];
   if (!options.upgrade) {
-    args.push(`${o("gateway")} ${q(gatewayUrl)}`, `${o("code")} ${q(code)}`);
-    args.push(options.fullAccess ? (win ? "-FullAccess" : "--full-access") : `${o("allowed")} ${q(options.allowed)}`);
-    if (options.name) args.push(`${o("name")} ${q(options.name)}`);
-    if (options.watch) args.push(`${o("watch")} ${q(options.watch)}`);
+    opts.push([o("gateway"), gatewayUrl], [o("code"), code]);
+    opts.push(options.fullAccess ? [win ? "-FullAccess" : "--full-access", null] : [o("allowed"), options.allowed]);
+    if (options.name) opts.push([o("name"), options.name]);
+    if (options.watch) opts.push([o("watch"), options.watch]);
   }
-  if (updateKeyB64) args.push(`${o("update-key")} ${q(updateKeyB64)}`);
-  return args;
+  if (updateKeyB64) opts.push([o("update-key"), updateKeyB64]);
+  return opts;
+}
+
+// For a script: -Gateway 'http://…' -Code '…'
+function installerArgs(params, win = false) {
+  return installerOptions(params, win).map(([name, value]) => (value === null ? name : `${name} ${q(value)}`));
 }
 
 function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
@@ -255,14 +281,35 @@ function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, op
 }
 
 const SCRIPTS = { linux: linuxScript, windows: windowsScript, synology: synologyScript };
-const SETUP_MAGIC = Buffer.from("BGSETUP1");
+// The setup program's name carries the short link: BackupAgentSetup_K7Q2MX_192.168.1.25_8080.exe
+// (an "s" after the port = https). An address that can't go in a file name (IPv6) gets
+// BackupAgentSetup_K7Q2MX.exe, and the program asks for the link.
+export function setupFileName(gatewayUrl, short) {
+  try {
+    const u = new URL(gatewayUrl);
+    const port = u.port || (u.protocol === "https:" ? "443" : "80");
+    if (/^[A-Za-z0-9.-]{1,200}$/.test(u.hostname)) return `BackupAgentSetup_${short}_${u.hostname}_${port}${u.protocol === "https:" ? "s" : ""}.exe`;
+  } catch {
+    // fall through
+  }
+  return `BackupAgentSetup_${short}.exe`;
+}
 
 export function createInstalls({ config, store, agentPackage, windowsSetup, updateKey = null }) {
-  const links = new Map(); // token -> { code, clientName, expiresAt, options }
+  const links = new Map(); // token -> { code, clientName, expiresAt, options, short }
+  const shorts = new Map(); // short code -> token
 
   function prune() {
     const now = Date.now();
-    for (const [token, link] of links) if (link.expiresAt.getTime() <= now) links.delete(token);
+    for (const [token, link] of links) {
+      if (link.expiresAt.getTime() <= now) forget(token);
+    }
+  }
+
+  function forget(token) {
+    const link = links.get(token);
+    if (link) shorts.delete(link.short);
+    links.delete(token);
   }
 
   function live(token) {
@@ -270,8 +317,31 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
     return typeof token === "string" && /^[A-Za-z0-9_-]{43}$/.test(token) ? links.get(token) : undefined;
   }
 
+  // The token behind a short code (any case), if it's still live
+  function tokenOf(short) {
+    prune();
+    const code = String(short ?? "").toUpperCase();
+    return SHORT_RE.test(code) ? shorts.get(code) : undefined;
+  }
+
   const SCRIPT_FILES = { linux: "linux.sh", windows: "windows.ps1", synology: "synology.sh" };
   const scriptUrl = (base, token, platform) => `${base}/install/${token}/${SCRIPT_FILES[platform]}`;
+  const expiresText = (d) => d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+
+  function scriptFor(token, link, ip) {
+    log.info(`Install script (${link.options.platform}) for "${link.clientName}" downloaded by ${ip}`);
+    store.audit("device", "install-link.used", { clientName: link.clientName, platform: link.options.platform }, ip);
+    return SCRIPTS[link.options.platform]({
+      gatewayUrl: agentApiUrl(config).url,
+      token,
+      pkg: agentPackage,
+      code: link.code,
+      clientName: link.clientName,
+      expiresAt: link.expiresAt,
+      options: link.options,
+      updateKeyB64: updateKey?.publicKeyB64 ?? null,
+    });
+  }
 
   return {
     available: Boolean(agentPackage),
@@ -282,27 +352,33 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       if (!agentPackage) throw new InstallError("The agent package isn't available on this gateway (agent folder not found).");
       prune();
       const token = crypto.randomBytes(32).toString("base64url");
-      links.set(token, { code, clientName, expiresAt, options });
+      let short;
+      do short = newShortCode();
+      while (shorts.has(short));
+      links.set(token, { code, clientName, expiresAt, options, short });
+      shorts.set(short, token);
       const { url, localOnly } = agentApiUrl(config);
-      const script = scriptUrl(url, token, options.platform);
+      const shortUrl = `${url}/i/${short}`;
+      // Only this computer can reach the gateway: say how to open it up, with this computer's addresses
+      const network = localOnly ? { port: config.port, addresses: lanAddresses() } : null;
+      const common = { short, shortUrl, gatewayUrl: url, localOnly, network };
       if (options.platform === "windows") {
-        const ps = `irm '${script}' | iex`;
+        const ps = `irm ${shortUrl}/win | iex`;
         return {
           platform: "windows",
+          ...common,
           commands: [
             { id: "powershell", label: "PowerShell (as Administrator)", command: ps },
             { id: "cmd", label: "Command Prompt (as Administrator)", command: `powershell -NoProfile -ExecutionPolicy Bypass -Command "${ps}"` },
           ],
-          setupUrl: windowsSetup ? `${url}/install/${token}/BackupAgentSetup.exe` : null,
-          gatewayUrl: url,
-          localOnly,
+          setupUrl: windowsSetup ? `${shortUrl}/setup.exe` : null,
+          setupName: windowsSetup ? setupFileName(url, short) : null,
         };
       }
       return {
         platform: options.platform,
-        commands: [{ id: "bash", label: options.platform === "synology" ? "SSH" : "Terminal", command: `(curl -fsSL '${script}' || wget -qO- '${script}') | sudo bash` }],
-        gatewayUrl: url,
-        localOnly,
+        ...common,
+        commands: [{ id: "bash", label: options.platform === "synology" ? "SSH" : "Terminal", command: `(curl -fsSL ${shortUrl}/sh || wget -qO- ${shortUrl}/sh) | sudo bash` }],
       };
     },
 
@@ -310,39 +386,67 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
     script(token, platform, ip) {
       const link = live(token);
       if (!link || link.options.platform !== platform) return null;
-      log.info(`Install script (${platform}) for "${link.clientName}" downloaded by ${ip}`);
-      store.audit("device", "install-link.used", { clientName: link.clientName, platform }, ip);
-      return SCRIPTS[platform]({
-        gatewayUrl: agentApiUrl(config).url,
-        token,
-        pkg: agentPackage,
-        code: link.code,
-        clientName: link.clientName,
-        expiresAt: link.expiresAt,
-        options: link.options,
-        updateKeyB64: updateKey?.publicKeyB64 ?? null,
-      });
+      return scriptFor(token, link, ip);
     },
 
-    // GET /install/<token>/BackupAgentSetup.exe: the generic setup program with this link added to its end
-    setupExe(token) {
-      const link = live(token);
+    // The short link's details, for its page: null if it's dead
+    shortLink(short) {
+      const token = tokenOf(short);
+      const link = token && links.get(token);
+      if (!link) return null;
+      const { url } = agentApiUrl(config);
+      return {
+        short: link.short,
+        url: `${url}/i/${link.short}`,
+        platform: link.options.platform,
+        upgrade: Boolean(link.options.upgrade),
+        clientName: cleanName(link.clientName),
+        expires: expiresText(link.expiresAt),
+        setupName: link.options.platform === "windows" && windowsSetup ? setupFileName(url, link.short) : null,
+      };
+    },
+
+    // GET /i/<short>/win or /sh: the script for that link (kind: "windows" or "unix")
+    shortScript(short, kind, ip) {
+      const token = tokenOf(short);
+      const link = token && links.get(token);
+      if (!link) return null;
+      const isWindows = link.options.platform === "windows";
+      if ((kind === "windows") !== isWindows) return { wrong: true, platform: link.options.platform };
+      return { script: scriptFor(token, link, ip) };
+    },
+
+    // GET /i/<short>/setup.json: what the setup program needs (it checks the package against sha256)
+    setupJson(short, ip) {
+      const token = tokenOf(short);
+      const link = token && links.get(token);
+      if (!link || link.options.platform !== "windows") return null;
+      log.info(`Setup program for "${link.clientName}" started by ${ip}`);
+      store.audit("device", "install-link.used", { clientName: link.clientName, platform: "windows", via: "setup program" }, ip);
+      const gatewayUrl = agentApiUrl(config).url;
+      return {
+        client: cleanName(link.clientName),
+        expires: expiresText(link.expiresAt),
+        zip: `/install/${token}/agent.zip`,
+        sha256: agentPackage.zipSha256,
+        args: installerOptions(
+          { code: link.code, options: link.options, gatewayUrl, updateKeyB64: updateKey?.publicKeyB64 ?? null },
+          true
+        ).flatMap(([name, value]) => (value === null ? [name] : [name, value])),
+      };
+    },
+
+    // GET /i/<short>/setup.exe: the setup program (the same file for everyone) and the name it's saved as
+    setupExe(short) {
+      const token = tokenOf(short);
+      const link = token && links.get(token);
       if (!link || link.options.platform !== "windows" || !windowsSetup) return null;
-      const info = Buffer.from(
-        JSON.stringify({
-          script: scriptUrl(agentApiUrl(config).url, token, "windows"),
-          client: cleanName(link.clientName),
-          expires: link.expiresAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }),
-        })
-      );
-      const len = Buffer.alloc(8);
-      len.writeBigUInt64BE(BigInt(info.length));
-      return Buffer.concat([windowsSetup, info, len, SETUP_MAGIC]);
+      return { file: windowsSetup, name: setupFileName(agentApiUrl(config).url, link.short) };
     },
 
     // The device enrolled with the code: the link is used up
     codeUsed(codeHash) {
-      for (const [token, link] of links) if (link.code && hashCode(link.code) === codeHash) links.delete(token);
+      for (const [token, link] of links) if (link.code && hashCode(link.code) === codeHash) forget(token);
     },
 
     // GET /install/<token>/agent.tar.gz or agent.zip

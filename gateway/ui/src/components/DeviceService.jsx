@@ -1,12 +1,14 @@
 // The Service card on a device's page: pause its backups, uninstall its agent from here (now, or
-// the next time it connects), or remove a device that's gone. Backups already made are always kept.
+// the next time it connects), or remove a device that's gone. Backups already made are kept until a
+// removed device is deleted for good: by hand, or by itself after the days set on the Devices page
+// (unless it's kept).
 
 import { useState } from "react";
-import { Link } from "react-router";
-import { CircleCheck, LoaderCircle, Pause, Play, PowerOff, Unplug } from "lucide-react";
+import { Link, useNavigate } from "react-router";
+import { CircleCheck, LoaderCircle, Pause, Play, PowerOff, Trash2, Unplug } from "lucide-react";
 import { api } from "../api.js";
 import { usePolling } from "../usePolling.js";
-import { formatDateTime, timeAgo } from "../format.js";
+import { formatDateTime, formatSize, timeAgo } from "../format.js";
 import Modal from "./Modal.jsx";
 import { inputClass, secondaryButton } from "./buttons.js";
 
@@ -14,7 +16,7 @@ const dangerButton =
   "inline-flex h-10 items-center justify-center gap-2 rounded-md border border-alert/60 px-4 text-sm text-alert " +
   "hover:bg-alert/10 disabled:cursor-not-allowed disabled:opacity-50";
 
-function Confirm({ deviceName, title, children, action, onClose, onDone, path }) {
+export function Confirm({ deviceName, title, children, action, onClose, onDone, path }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -85,8 +87,25 @@ function Progress({ r, live }) {
   );
 }
 
+// For a removed device: what deleting it for good means
+export function DeleteText({ storedBytes }) {
+  return (
+    <>
+      <p>
+        This deletes its backups on this gateway{storedBytes ? ` (${formatSize(storedBytes)})` : ""}, every version, and its jobs and alerts. It can&rsquo;t be
+        undone, and nothing of it can be restored after.
+      </p>
+      <p>
+        Off-site copies already made aren&rsquo;t deleted from there: in a bucket they run out with its retention, and a Google Drive folder you delete
+        yourself.
+      </p>
+    </>
+  );
+}
+
 export default function DeviceService({ deviceId, deviceName, onChanged }) {
   const { data, reload } = usePolling(`/devices/${deviceId}/service`, 5000);
+  const navigate = useNavigate();
   const [confirm, setConfirm] = useState(null); // "uninstall" | "forget"
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -124,7 +143,44 @@ export default function DeviceService({ deviceId, deviceName, onChanged }) {
           <p className="mt-1 text-dim">
             It can't connect any more. Its backups are kept: restore them to another device from the <Link to="/restore" className="text-signal hover:underline">Restore</Link> page.
           </p>
+          {data.autoDelete?.days > 0 && (r?.state === "done" || r?.state === "forgotten") && (
+            <div className="mt-4 flex flex-col gap-3 border-t border-edge pt-4 md:flex-row md:items-center md:justify-between">
+              <p className={data.autoDelete.keep ? "text-dim" : "text-warn"}>
+                {data.autoDelete.keep
+                  ? "Its backups are kept: they won't be deleted automatically."
+                  : `Its backups will be deleted automatically on ${new Date(data.autoDelete.at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}.`}
+              </p>
+              <button
+                type="button"
+                className={`${secondaryButton} h-10 px-4`}
+                disabled={busy === "keep"}
+                onClick={() => act("keep", () => api.post(`/devices/${deviceId}/keep`, { keep: !data.autoDelete.keep }))}
+              >
+                {data.autoDelete.keep ? "Delete them automatically again" : "Keep its backups"}
+              </button>
+            </div>
+          )}
+          {error && <p className="mt-3 text-warn">{error}</p>}
+          <div className="mt-4 flex flex-col gap-3 border-t border-edge pt-4 md:flex-row md:items-center md:justify-between">
+            <p className="text-dim">Not needed any more? Delete the device and its backups{data.storedBytes ? ` (${formatSize(data.storedBytes)})` : ""} for good.</p>
+            <button type="button" className={dangerButton} onClick={() => setConfirm("delete")}>
+              <Trash2 size={15} />
+              Delete for good
+            </button>
+          </div>
         </div>
+        {confirm === "delete" && (
+          <Confirm
+            deviceName={deviceName}
+            title={`Delete ${deviceName} for good?`}
+            action="Delete device and backups"
+            path={`/devices/${deviceId}/delete`}
+            onClose={() => setConfirm(null)}
+            onDone={() => navigate("/devices")}
+          >
+            <DeleteText storedBytes={data.storedBytes} />
+          </Confirm>
+        )}
       </section>
     );
   }

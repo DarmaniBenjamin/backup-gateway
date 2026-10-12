@@ -55,7 +55,7 @@ const installs = createInstalls({ config, store, agentPackage, windowsSetup, upd
 // Automatic agent updates: devices on an older agent are offered this gateway's version
 const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updateKey, security });
 // Uninstalling agents from the web UI (signed with the same update key)
-const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker });
+const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker, store });
 const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
@@ -67,8 +67,12 @@ copies.start();
 notify.start();
 security.start({ pendingCleared: () => copies.syncNow() });
 health.start();
-const removalTimer = setInterval(() => removals.tick(), 60_000);
+const removalTimer = setInterval(() => removals.tick(), 30_000);
 removalTimer.unref();
+// Removed devices deleted for good N days after they were removed, if that's on (Devices page)
+removals.start({ copies, dataDir: config.dataDir });
+setTimeout(() => removals.autoDeleteTick(), 60_000).unref();
+setInterval(() => removals.autoDeleteTick(), 60 * 60_000).unref();
 
 function onListenError(name, port) {
   return (err) => {

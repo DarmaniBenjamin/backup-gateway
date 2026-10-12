@@ -21,6 +21,7 @@ import { inspectFile } from "./inspect.js";
 import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js";
 import { cleanAgentStatus, settingsOf } from "./device-settings.js";
 import { log } from "./logger.js";
+import { installPage, deadLinkPage, tooManyPage, PAGE_CSP } from "./install-page.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
 const LIMIT_CHUNK = CHUNK_SIZE + 1024;   // one sealed chunk + a little overhead
@@ -38,6 +39,30 @@ function tooManyEnrollAttempts(ip) {
   recent.push(now);
   enrollAttempts.set(ip, recent);
   return recent.length > 10;
+}
+
+// Short install links that don't exist: 20 wrong ones in 10 minutes from one address, and it waits
+// (the codes are short, so guessing is kept slow)
+const shortMisses = new Map();
+function tooManyShortMisses(ip, miss = false) {
+  const now = Date.now();
+  const recent = (shortMisses.get(ip) || []).filter((t) => now - t < 10 * 60 * 1000);
+  if (miss) recent.push(now);
+  if (recent.length) shortMisses.set(ip, recent);
+  else shortMisses.delete(ip);
+  return recent.length >= 20;
+}
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html),
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": PAGE_CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(html);
 }
 
 class HttpError extends Error {
@@ -538,8 +563,50 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
         return await handleEnroll(req, res, await readBody(req, LIMIT_SMALL), ip);
       }
 
+      // Short install links: http://…:8080/i/K7Q2MX (see installs.js)
+      if (req.method === "GET" && (match = url.match(/^\/i\/([A-Za-z0-9]{6})(?:\/(win|sh|setup\.json|setup\.exe))?\/?(?:\?.*)?$/))) {
+        const [, short, what] = match;
+        const page = !what;
+        if (tooManyShortMisses(ip)) {
+          return page ? sendHtml(res, 429, tooManyPage()) : send(res, 429, { error: "Too many wrong install links. Wait 10 minutes." });
+        }
+        const link = installs?.shortLink(short);
+        if (!link) {
+          tooManyShortMisses(ip, true);
+          if (page) return sendHtml(res, 404, deadLinkPage());
+          if (what === "win" || what === "sh") {
+            const msg = "This install link has expired or was already used. Make a new one in the web UI (Devices > Add device).";
+            return sendText(res, 200, what === "win" ? `Write-Host '${msg}' -ForegroundColor Red\n` : `echo '${msg}' >&2; exit 1\n`);
+          }
+          return send(res, 404, { error: "This install link has expired or was already used." });
+        }
+        if (page) return sendHtml(res, 200, installPage(link));
+        if (what === "win" || what === "sh") {
+          const r = installs.shortScript(short, what === "win" ? "windows" : "unix", ip);
+          if (r?.wrong) {
+            const msg = `This install link is for a ${r.platform === "windows" ? "Windows" : r.platform === "synology" ? "Synology" : "Linux"} device.`;
+            return sendText(res, 200, what === "win" ? `Write-Host '${msg}' -ForegroundColor Red\n` : `echo '${msg}' >&2; exit 1\n`);
+          }
+          return sendText(res, 200, r.script);
+        }
+        if (what === "setup.json") {
+          const info = installs.setupJson(short, ip);
+          return info ? send(res, 200, info) : send(res, 404, { error: "This install link isn't for a Windows device." });
+        }
+        const exe = installs.setupExe(short);
+        if (!exe) return send(res, 404, { error: "There's no setup program for this link." });
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.microsoft.portable-executable",
+          "Content-Length": exe.file.length,
+          "Content-Disposition": `attachment; filename="${exe.name}"`,
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        });
+        return res.end(exe.file);
+      }
+
       // One-line installs: the link's secret token is the only key (see installs.js)
-      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/(linux\.sh|synology\.sh|windows\.ps1|agent\.tar\.gz|agent\.zip|BackupAgentSetup\.exe)$/))) {
+      if (req.method === "GET" && (match = url.match(/^\/install\/([A-Za-z0-9_-]{43})\/(linux\.sh|synology\.sh|windows\.ps1|agent\.tar\.gz|agent\.zip)$/))) {
         const [, token, file] = match;
         if (file === "linux.sh" || file === "synology.sh" || file === "windows.ps1") {
           const platform = { "linux.sh": "linux", "synology.sh": "synology", "windows.ps1": "windows" }[file];
@@ -551,17 +618,6 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
           }
           return sendText(res, 200, script);
         }
-        if (file === "BackupAgentSetup.exe") {
-          const exe = installs?.setupExe(token);
-          if (!exe) return send(res, 404, { error: "This install link has expired or was already used." });
-          res.writeHead(200, {
-            "Content-Type": "application/vnd.microsoft.portable-executable",
-            "Content-Length": exe.length,
-            "Content-Disposition": 'attachment; filename="BackupAgentSetup.exe"',
-            "Cache-Control": "no-store",
-          });
-          return res.end(exe);
-        }
         const pkg = installs?.package(token, file === "agent.zip" ? "zip" : "tar");
         if (!pkg) return send(res, 404, { error: "Not found" });
         return sendBinary(res, 200, pkg);
@@ -570,6 +626,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
       // Everything below requires a signed request from an enrolled device
       let route, limit, chunkIdParam, jobIdParam;
       if (req.method === "POST" && url === "/api/heartbeat") [route, limit] = ["heartbeat", LIMIT_SMALL];
+      else if (req.method === "POST" && url === "/api/goodbye") [route, limit] = ["goodbye", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/key-exchange") [route, limit] = ["kx", LIMIT_SMALL];
       else if (req.method === "POST" && url === "/api/chunks/check") [route, limit] = ["check", LIMIT_SMALL * 2];
       else if (req.method === "POST" && url === "/api/files/commit") [route, limit] = ["commit", LIMIT_COMMIT];
@@ -597,6 +654,12 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
 
       switch (route) {
         case "heartbeat": return handleHeartbeat(res, device, body, ip);
+        case "goodbye": {
+          // The device's updater, once it has uninstalled the agent (see removals.js)
+          const info = parseJson(body);
+          removals?.goodbye(device, { ok: info.ok === true, order: typeof info.order === "string" ? info.order : null, error: typeof info.error === "string" ? info.error.slice(0, 300) : null });
+          return send(res, 200, { ok: true });
+        }
         case "kx": return handleKeyExchange(res, device, body);
         case "check": return handleCheckChunks(res, device, body);
         case "put": return handlePutChunk(res, device, body, chunkIdParam);

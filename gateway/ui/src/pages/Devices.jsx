@@ -1,9 +1,11 @@
 // Devices, grouped by client. Shows connection status, backup activity and storage per device,
-// and lets you create an enrollment code for a new device.
+// and lets you create an enrollment code for a new device. Removed devices (uninstalled, or cut
+// off) are listed apart at the bottom, where they can be deleted for good, by hand or by
+// themselves some days after they were removed.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Plus } from "lucide-react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -11,7 +13,9 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import LoadState from "../components/LoadState.jsx";
 import AddDeviceModal from "../components/AddDeviceModal.jsx";
 import { UpdateLine, UpdatesBar, useUpdates } from "../components/AgentUpdates.jsx";
-import { primaryButton } from "../components/buttons.js";
+import { Confirm, DeleteText } from "../components/DeviceService.jsx";
+import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
+import { api } from "../api.js";
 
 function Field({ label, children, title }) {
   return (
@@ -86,20 +90,143 @@ function DeviceRow({ d, update, gatewayVersion }) {
   );
 }
 
+const dayText = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const daysLabel = (n) => (n === 0 ? "Never" : n % 365 === 0 ? `${n / 365} year${n === 365 ? "" : "s"} after it's removed` : `${n} days after it's removed`);
+
+// What happens to a removed device's backups, in a few words
+export function autoDeleteText(a) {
+  if (!a?.days) return null;
+  if (a.keep) return "kept: not deleted automatically";
+  return a.at ? `deleted automatically on ${dayText(a.at)}` : null;
+}
+
+// Removed devices' backups deleted by themselves after some days (or never)
+function AutoDeleteSetting({ onChanged }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.get("/removed-devices/auto-delete").then(setData, (err) => setError(err.message));
+  }, []);
+  if (!data) return error ? <p className="px-5 py-3 text-sm text-warn">{error}</p> : null;
+  return (
+    <div className="flex flex-col gap-2 border-b border-edge px-5 py-3 text-sm md:flex-row md:items-center md:justify-between">
+      <label htmlFor="auto-delete" className="text-dim">
+        Delete a removed device and its backups
+      </label>
+      <div className="w-full md:w-64">
+        <select
+          id="auto-delete"
+          className={inputClass}
+          value={data.days}
+          disabled={saving}
+          onChange={async (e) => {
+            setSaving(true);
+            setError("");
+            try {
+              setData(await api.post("/removed-devices/auto-delete", { days: Number(e.target.value) }));
+              onChanged();
+            } catch (err) {
+              setError(err.message);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {data.choices.map((n) => (
+            <option key={n} value={n}>
+              {daysLabel(n)}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && <p className="text-warn">{error}</p>}
+    </div>
+  );
+}
+
+// Removed devices: out of the way, still restorable until deleted for good
+function RemovedDevices({ devices, reload }) {
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex items-center gap-2 text-sm text-dim hover:text-fg"
+      >
+        <ChevronDown size={16} className={`transition-transform ${open ? "" : "-rotate-90"}`} aria-hidden="true" />
+        {devices.length} removed device{devices.length === 1 ? "" : "s"}
+      </button>
+      {open && (
+        <div className="mt-3 overflow-hidden rounded-lg border border-edge">
+          <p className="border-b border-edge px-5 py-3 text-sm text-dim">
+            They can&rsquo;t connect any more. Their backups can be restored to another device until they&rsquo;re deleted for good: by you, or
+            by themselves after the number of days below (an alert goes out 3 days before). Copies already in the cloud stay until their lock
+            runs out.
+          </p>
+          <AutoDeleteSetting onChanged={reload} />
+          <ul className="divide-y divide-edge">
+            {devices.map((d) => (
+              <li key={d.id} className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 text-sm">
+                  <Link to={`/devices/${d.id}`} className="text-fg hover:text-signal hover:underline">
+                    {d.name}
+                  </Link>
+                  <p className="text-xs text-dim">
+                    {d.client}, {d.uninstalled ? "agent uninstalled" : "removed"}
+                    {d.removedAt ? ` ${timeAgo(d.removedAt)}` : ""}, {formatSize(d.storedBytes)} of backups kept
+                  </p>
+                  {autoDeleteText(d.autoDelete) && (
+                    <p className={`text-xs ${d.autoDelete.keep ? "text-dim" : "text-warn"}`}>Backups {autoDeleteText(d.autoDelete)}</p>
+                  )}
+                </div>
+                <button type="button" className={`${secondaryButton} h-9 px-3`} onClick={() => setDeleting(d)}>
+                  <Trash2 size={14} />
+                  Delete for good
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {deleting && (
+        <Confirm
+          deviceName={deleting.name}
+          title={`Delete ${deleting.name} for good?`}
+          action="Delete device and backups"
+          path={`/devices/${deleting.id}/delete`}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            reload();
+          }}
+        >
+          <DeleteText storedBytes={deleting.storedBytes} />
+        </Confirm>
+      )}
+    </section>
+  );
+}
+
 export default function Devices() {
   const { data, error, loading, reload } = usePolling("/devices", 15000);
   const [adding, setAdding] = useState(false);
   const { data: updates, reload: reloadUpdates } = useUpdates();
   const updateOf = useMemo(() => new Map((updates?.devices ?? []).map((u) => [u.id, u])), [updates]);
 
+  const active = useMemo(() => (data ?? []).filter((d) => d.status !== "revoked"), [data]);
+  const removed = useMemo(() => (data ?? []).filter((d) => d.status === "revoked"), [data]);
   const groups = useMemo(() => {
     const map = new Map();
-    for (const d of data ?? []) {
+    for (const d of active) {
       if (!map.has(d.client)) map.set(d.client, []);
       map.get(d.client).push(d);
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [data]);
+  }, [active]);
 
   const addButton = (
     <button type="button" className={primaryButton} onClick={() => setAdding(true)}>
@@ -111,12 +238,12 @@ export default function Devices() {
   return (
     <div className="w-full">
       <PageHeader title="Devices" action={addButton}>
-        {data && `${data.length} device${data.length === 1 ? "" : "s"} across ${groups.length} client${groups.length === 1 ? "" : "s"}.`}
+        {data && `${active.length} device${active.length === 1 ? "" : "s"} across ${groups.length} client${groups.length === 1 ? "" : "s"}.`}
       </PageHeader>
 
       {!data ? (
         <LoadState loading={loading} error={error} onRetry={reload} />
-      ) : data.length === 0 ? (
+      ) : active.length === 0 && removed.length === 0 ? (
         <div className="rounded-lg border border-dashed border-edge px-6 py-12 text-center">
           <p className="font-medium">No devices yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-dim">
@@ -147,6 +274,7 @@ export default function Devices() {
               </div>
             </section>
           ))}
+          {removed.length > 0 && <RemovedDevices devices={removed} reload={reload} />}
         </div>
       )}
 

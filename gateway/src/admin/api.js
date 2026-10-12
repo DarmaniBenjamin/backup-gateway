@@ -119,6 +119,9 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       lastBackupAt: s?.last_backup ?? null,
       originalBytes: storageRow?.plain ?? 0,
       storedBytes: storageRow?.stored ?? 0,
+      removedAt: d.status !== "active" ? removals?.get(d.id)?.finished_at ?? null : null,
+      uninstalled: d.status !== "active" && removals?.get(d.id)?.state === "done",
+      autoDelete: d.status !== "active" && removals ? removals.autoDeleteOf(d.id) : null,
     };
   }
 
@@ -189,7 +192,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       // Last 24 hours of changes per device, in 2-hour slots, for the activity bars on each device card
       const SLOT_MS = 2 * 3600 * 1000;
       const start = Date.now() - 12 * SLOT_MS;
-      const devices = db.listDevices().map((d) => {
+      // Removed devices aren't part of the dashboard (they're listed on the Devices page)
+      const devices = db.listDevices().filter((d) => d.status === "active").map((d) => {
         const activity = Array.from({ length: 12 }, () => ({ ok: 0, held: 0 }));
         for (const r of store.activitySince(d.id, new Date(start).toISOString())) {
           const slot = activity[Math.min(11, Math.floor((new Date(r.received_at) - start) / SLOT_MS))];
@@ -1041,7 +1045,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
   if (security) Object.assign(routes, securityRoutes({ db, security, scanner, broker, ApiError }));
   if (updates) Object.assign(routes, updatesRoutes({ db, store, updates, installs, broker, ApiError, getDeviceOr404, log }));
   if (notify) Object.assign(routes, notifyRoutes({ notify, health, store, ApiError }));
-  if (removals) Object.assign(routes, serviceRoutes({ db, store, removals, health, broker, ApiError, getDeviceOr404, requireMultiFolder, agentStatusOf, log }));
+  if (removals) Object.assign(routes, serviceRoutes({ db, store, removals, health, broker, copies, dataDir: config.dataDir, ApiError, getDeviceOr404, requireMultiFolder, agentStatusOf, log }));
 
   // Turn "GET /devices/:id/files" patterns into matchers
   const compiled = Object.entries(routes).map(([key, handler]) => {

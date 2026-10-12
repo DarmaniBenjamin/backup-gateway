@@ -35,6 +35,45 @@ const HOW_TO = {
     "It asks for the device\u2019s password (sudo), then downloads the agent from this gateway, checks it, installs it as a background service that starts with the computer, and connects.",
 };
 
+// The gateway only listens on 127.0.0.1: an install made now only works on this same computer.
+// Says exactly what to change, with this computer's own addresses filled in.
+function OnlyHere({ network }) {
+  const first = network?.addresses?.[0]?.address;
+  const port = network?.port ?? 8080;
+  return (
+    <div className="mt-5 rounded-md border border-warn/40 bg-warn/10 p-4 text-sm">
+      <p className="flex gap-2 font-medium text-warn">
+        <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+        This only works on this computer
+      </p>
+      <p className="mt-2 text-dim">
+        The gateway only accepts agents from this computer (127.0.0.1), so another PC, a NAS or a virtual machine can&rsquo;t reach it. To add
+        those, put these two lines in the gateway&rsquo;s .env (replacing the GATEWAY_HOST and GATEWAY_PUBLIC_URL lines there), restart the
+        gateway, and add the device again:
+      </p>
+      <div className="mt-3">
+        <CopyBox
+          id="network-env"
+          text={`GATEWAY_HOST=0.0.0.0\nGATEWAY_PUBLIC_URL=http://${first ?? "YOUR-GATEWAY-IP"}:${port}`}
+          label="Copy the .env lines"
+        />
+      </div>
+      {network?.addresses?.length > 1 && (
+        <p className="mt-2 text-xs text-dim">
+          This computer has more than one address: {network.addresses.map((a) => `${a.address} (${a.name})`).join(", ")}. Use the one the
+          devices are on.
+        </p>
+      )}
+      {!first && <p className="mt-2 text-xs text-dim">Replace YOUR-GATEWAY-IP with this computer&rsquo;s address on the network (ip -4 addr shows it).</p>}
+      <p className="mt-3 text-dim">If the gateway computer has a firewall (Omarchy turns one on), let devices reach port {port}:</p>
+      <div className="mt-2">
+        <CopyBox id="network-ufw" text={`sudo ufw allow ${port}/tcp`} label="Copy the firewall command" />
+      </div>
+      <p className="mt-2 text-xs text-dim">The web UI stays on this computer only: that&rsquo;s GATEWAY_ADMIN_HOST, leave it as 127.0.0.1.</p>
+    </div>
+  );
+}
+
 function CopyBox({ id, text, label, large = false }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
@@ -99,28 +138,39 @@ function Result({ result, onClose }) {
 
       {install ? (
         <>
-          {install.setupUrl && (
+          {install.localOnly && <OnlyHere network={install.network} />}
+          {install.shortUrl && !install.localOnly && (
             <>
-              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest: the setup program</h3>
+              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Short link for the new device</h3>
               <p className="mt-1 text-sm text-dim">
-                Download it and put it on the new PC (or open the link below in a browser on that PC), then double-click{" "}
-                <span className="font-mono text-fg">BackupAgentSetup.exe</span> and allow it to make changes.
+                Type it into a browser on the new device: it shows {install.platform === "windows" ? "the setup program and " : ""}the command to
+                paste, for this device only.
               </p>
-              <a href={install.setupUrl} className={`${primaryButton} mt-3 w-full sm:w-auto`} download="BackupAgentSetup.exe">
+              <div className="mt-2">
+                <CopyBox id="short-url" text={install.shortUrl} label="Copy short link" large />
+              </div>
+            </>
+          )}
+          {install.setupUrl && !install.localOnly && (
+            <>
+              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest on Windows: the setup program</h3>
+              <p className="mt-1 text-sm text-dim">
+                Download it here and copy it to the new PC, or get it from the short link on that PC. Double-click it and allow it to make
+                changes. Keep its name as it is: the name tells it which install this is.
+              </p>
+              <a href={install.setupUrl} className={`${primaryButton} mt-3 w-full sm:w-auto`} download={install.setupName}>
                 <Download size={16} aria-hidden="true" />
-                Download BackupAgentSetup.exe
+                Download the setup program
               </a>
-              <p className="mb-1 mt-3 text-xs text-dim">Download link for the new PC</p>
-              <CopyBox id="setup-url" text={install.setupUrl} label="Copy download link" />
+              <p className="mt-2 break-all font-mono text-xs text-dim">{install.setupName}</p>
               <p className="mt-2 text-xs text-dim">
-                Windows may say it &ldquo;protected your PC&rdquo; because the program isn&rsquo;t code-signed yet: click More info, then
-                Run anyway.
+                Until the program is code-signed, Windows may say it &ldquo;protected your PC&rdquo;: click More info, then Run anyway.
               </p>
             </>
           )}
           <h3 className="mt-5 font-display text-sm font-semibold text-fg">
             {install.platform === "windows"
-              ? install.setupUrl
+              ? install.setupUrl && !install.localOnly
                 ? "Or paste one command"
                 : "Paste one command on the new PC"
               : install.platform === "synology"
@@ -137,17 +187,6 @@ function Result({ result, onClose }) {
             {HOW_TO[install.platform] ?? HOW_TO.linux}{" "}
             The device shows up here within a minute.
           </p>
-          {install.localOnly && (
-            <p className="mt-3 flex gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-              <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-              <span>
-                The gateway only accepts agents from this computer right now, so this command only works here. For other devices,
-                set <span className="font-mono">GATEWAY_HOST=0.0.0.0</span> and{" "}
-                <span className="font-mono">GATEWAY_PUBLIC_URL</span> in the gateway&rsquo;s .env, restart it, and create a new
-                command.
-              </span>
-            </p>
-          )}
           <details className="mt-5 text-sm">
             <summary className="cursor-pointer text-dim hover:text-fg">Set it up by hand instead</summary>
             <p className="mt-2 text-dim">Put this line in the agent&rsquo;s .env file, then start the agent:</p>
