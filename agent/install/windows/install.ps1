@@ -218,8 +218,15 @@ try {
     $lines = for ($i = 0; $i -lt $UpdateKey.Length; $i += 64) { $UpdateKey.Substring($i, [Math]::Min(64, $UpdateKey.Length - $i)) }
     $pem = (@("-----BEGIN PUBLIC KEY-----") + $lines + @("-----END PUBLIC KEY-----")) -join "`n"
     [IO.File]::WriteAllText($keyFile, "$pem`n", (New-Object Text.UTF8Encoding $false))
-    & $nodeExe -e 'require("crypto").createPublicKey(require("fs").readFileSync(process.argv[1]))' $keyFile 2>$null
-    if ($LASTEXITCODE -ne 0) { Remove-Item $keyFile -Force; throw "-UpdateKey isn't a valid key." }
+    # No double quotes in the code: Windows PowerShell 5.1 drops them when it starts node.exe, which
+    # turned require("crypto") into require(crypto). And node writing to stderr mustn't stop the install.
+    $check = "require('crypto').createPublicKey(require('fs').readFileSync(process.argv[1]))"
+    $keyOk = $false
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $nodeExe -e $check $keyFile 2>$null | Out-Null; $keyOk = ($LASTEXITCODE -eq 0) } catch { $keyOk = $false }
+    finally { $ErrorActionPreference = $eap }
+    if (-not $keyOk) { Remove-Item $keyFile -Force; throw "-UpdateKey isn't a valid key." }
   }
   $updater = ""
   if (Test-Path $keyFile) {
