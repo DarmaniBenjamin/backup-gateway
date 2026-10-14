@@ -1,4 +1,4 @@
-// The gateway's address on the internet, with its https certificate (web UI: Certificate page).
+// The gateway's address on the internet, with its https certificate (web UI: Domain & SSL page).
 // Devices at client sites connect to this address. Two ways:
 //
 // 1. Caddy, for a server with its own public IP (a cloud VM). You type the domain, point its DNS

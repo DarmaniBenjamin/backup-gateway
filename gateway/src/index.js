@@ -57,7 +57,7 @@ const installs = createInstalls({ config, store, agentPackage, windowsSetup, upd
 const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updateKey, security });
 // Uninstalling agents from the web UI (signed with the same update key)
 const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker, store });
-// The gateway's address on the internet and its certificate (Certificate page: Caddy or a Cloudflare Tunnel)
+// The gateway's address on the internet and its certificate (Domain & SSL page: Caddy or a Cloudflare Tunnel)
 const address = createAddress({ dataDir: config.dataDir, config, security });
 const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)

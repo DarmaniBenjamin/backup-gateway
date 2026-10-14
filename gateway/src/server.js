@@ -581,7 +581,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
         return await handleEnroll(req, res, await readBody(req, LIMIT_SMALL), ip);
       }
 
-      // "Is this the gateway?" The Certificate page checks its address reaches this gateway (address.js)
+      // "Is this the gateway?" The Domain & SSL page checks its address reaches this gateway (address.js)
       if (req.method === "GET" && url === "/api/hello") return send(res, 200, { gateway: "backup-gateway", id: HELLO_ID });
 
       // Caddy's question before it gets a certificate (address.js). Only from Caddy on this computer:

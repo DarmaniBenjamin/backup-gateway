@@ -15,7 +15,7 @@
 #   3. sets where the backups are kept
 #   4. sets how devices reach the gateway:
 #        - online: a cloud VM, or a machine on site. Installs Caddy and
-#          cloudflared; you then add your domain on the web UI's Certificate
+#          cloudflared; you then add your domain on the web UI's Domain & SSL
 #          page (your domain + its own certificate, or a Cloudflare Tunnel)
 #        - this network only: for testing
 #   5. builds the web UI and runs the gateway as a service, started on every
@@ -184,11 +184,11 @@ MODE="$REPLY"
 
 if [[ $MODE == 1 ]]; then
   # Caddy or the tunnel bring devices from anywhere; devices on this computer's own networks can also
-  # connect straight to it. The domain is set on the Certificate page (kept in the gateway's database).
+  # connect straight to it. The domain is set on the Domain & SSL page (kept in the gateway's database).
   env_set GATEWAY_HOST 0.0.0.0
   env_set GATEWAY_PUBLIC_URL ""
   env_set GATEWAY_TRUST_PROXY 1
-  ok "Online. The domain is added on the web UI's Certificate page"
+  ok "Online. The domain is added on the web UI's Domain & SSL page"
 else
   # No address to type: the gateway finds this computer's addresses by itself, every one of them
   env_set GATEWAY_HOST 0.0.0.0
@@ -287,7 +287,7 @@ if [[ $MODE == 1 ]]; then
   fi
   if [[ $CADDY_OTHER == yes ]]; then
     warn "Caddy is already used here for something else (Uplink?), so it's left as it is."
-    warn "On this server, choose \"On site, with a Cloudflare Tunnel\" on the Certificate page."
+    warn "On this server, choose \"On site, with a Cloudflare Tunnel\" on the Domain & SSL page."
   else
     if ! command -v caddy >/dev/null; then
       if [[ $PKG == apt ]]; then
@@ -306,7 +306,7 @@ if [[ $MODE == 1 ]]; then
     cat >/etc/caddy/Caddyfile <<CADDYFILE
 $MARK
 # Empty on purpose: the backup gateway gives Caddy its settings (the address you add on
-# its Certificate page) through Caddy's admin API, which only listens on this computer.
+# its Domain & SSL page) through Caddy's admin API, which only listens on this computer.
 {
     admin localhost:2019
 }
@@ -380,7 +380,7 @@ else
 fi
 echo
 if [[ $MODE == 1 ]]; then
-  echo "Then, to put it online: open Certificate (under More), and either"
+  echo "Then, to put it online: open Domain & SSL (in the top bar), and either"
   echo "  - This server has its own IP: enter your domain, add the DNS record it shows, Get certificate"
   if [[ $CADDY_OTHER == yes ]]; then
     echo "    (not on this server: its Caddy belongs to something else)"

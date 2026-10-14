@@ -5,7 +5,7 @@
 // settings.
 //
 // Each link also has a short form, easy to type on the new device: http://192.168.1.25:8080/i/K7Q2MX
-// (any of the gateway's addresses works, and its domain once the Certificate page has one)
+// (any of the gateway's addresses works, and its domain once the Domain & SSL page has one)
 //   /i/K7Q2MX              a page with the setup program and the command (for a browser)
 //   /i/K7Q2MX/win          the Windows install script:  irm http://…/i/K7Q2MX/win | iex
 //   /i/K7Q2MX/sh           the Linux or Synology one:   curl -fsSL http://…/i/K7Q2MX/sh | sudo bash
@@ -121,7 +121,7 @@ const LOCAL_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const ALL_HOSTS = new Set(["0.0.0.0", "::"]);
 
 // Every address devices could use to reach the agent API, best first. Nothing to type in .env:
-//   1. config.publicUrl: the domain from the Certificate page once it's checked to work (address.js
+//   1. config.publicUrl: the domain from the Domain & SSL page once it's checked to work (address.js
 //      sets it: valid certificate, and it really reaches this gateway), or GATEWAY_PUBLIC_URL if set
 //   2. every network address this computer has right now (looked up each time, so a new IP from
 //      DHCP is picked up by itself), when the agent API listens on all of them (GATEWAY_HOST=0.0.0.0)

@@ -1,4 +1,4 @@
-// Certificate: the address devices at client sites use to reach this gateway, with its https
+// Domain & SSL: the address devices at client sites use to reach this gateway, with its https
 // certificate (see gateway/src/address.js). Two ways: a server with its own public IP (Caddy gets a
 // free Let's Encrypt certificate), or a machine on site with a Cloudflare Tunnel (no port to open).
 // The steps fill in as they happen; while it's being set up, it checks again every 10 seconds.
@@ -411,7 +411,7 @@ export default function Certificate() {
 
   return (
     <div className="w-full">
-      <PageHeader title="Address and certificate">
+      <PageHeader title="Domain & SSL certificate">
         The address devices at your clients use to reach this gateway, over https. Only the agent connection goes through it: this web UI stays on this
         computer.
       </PageHeader>

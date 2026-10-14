@@ -44,7 +44,7 @@ export function loadConfig() {
     adminPort: portSetting("GATEWAY_ADMIN_PORT", 8090),
 
     // Normally empty: devices are given this computer's own addresses, and the domain from the
-    // Certificate page once it works (address.js). Set it to force one address for every install.
+    // Domain & SSL page once it works (address.js). Set it to force one address for every install.
     publicUrl: publicUrlSetting(),
 
     // The agent's folder (code + installers), packed for one-line installs. Default: ../agent

@@ -1,4 +1,4 @@
-// Admin API for the Certificate page: the gateway's address on the internet (see address.js)
+// Admin API for the Domain & SSL page: the gateway's address on the internet (see address.js)
 //   GET  /address                      the address, its checks and the steps done
 //   POST /address/check                check again now
 //   POST /address/caddy   { domain, email }   a server with its own public IP: Caddy and Let's Encrypt

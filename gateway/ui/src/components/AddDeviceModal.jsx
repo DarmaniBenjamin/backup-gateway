@@ -48,8 +48,8 @@ function OnlyHere({ network }) {
       </p>
       <p className="mt-2 text-dim">
         Devices at other sites: give the gateway an address on the internet on the{" "}
-        <Link to="/certificate" className="text-signal hover:underline">
-          Certificate
+        <Link to="/domain" className="text-signal hover:underline">
+          Domain &amp; SSL
         </Link>{" "}
         page, then add the device again.
       </p>

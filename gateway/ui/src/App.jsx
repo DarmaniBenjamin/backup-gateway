@@ -45,7 +45,8 @@ export default function App() {
         <Route path="restore" element={<Restore />} />
         <Route path="security" element={<Security />} />
         <Route path="alerts" element={<Alerts />} />
-        <Route path="certificate" element={<Certificate />} />
+        <Route path="domain" element={<Certificate />} />
+        <Route path="certificate" element={<Navigate to="/domain" replace />} />
         <Route path="quarantine" element={<Quarantine />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="offsite" element={<Offsite />} />

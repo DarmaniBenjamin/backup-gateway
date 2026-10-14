@@ -20,10 +20,10 @@ const NAV = [
   { to: "/alerts", label: "Alerts" },
   { to: "/quarantine", label: "Quarantine" },
   { to: "/offsite", label: "Off-site" },
+  { to: "/domain", label: "Domain & SSL" },
   // Used less often: under More in the top bar (all listed in the phone menu)
   { to: "/jobs", label: "Jobs", more: true },
   { to: "/integrity", label: "Integrity", more: true },
-  { to: "/certificate", label: "Certificate", more: true },
   { to: "/audit", label: "Audit log", more: true },
 ];
 
