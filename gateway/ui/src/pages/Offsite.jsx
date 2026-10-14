@@ -1,14 +1,15 @@
-// Off-site copies. The failsafe: one place (a Backblaze/S3 bucket with Object Lock, or a Google
-// Drive) that gets everything from every device. Each device can also have its own copies (its own
+// Off-site copies. Failsafes: places (Backblaze/S3 buckets with Object Lock, Google Drives) that each
+// get everything from every device, as many as you like at once. Each device can also have its own copies (its own
 // bucket, its own Google Drive), set up on the device's page; they're all listed here too.
 // One recovery key opens every copy.
 
 import { useState } from "react";
 import { Link } from "react-router";
-import { Check, Cloud, HardDrive, Lock, ShieldCheck } from "lucide-react";
+import { Check, Cloud, HardDrive, Lock, Plus, ShieldCheck, X } from "lucide-react";
 import { usePolling } from "../usePolling.js";
 import { timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
+import { secondaryButton } from "../components/buttons.js";
 import LoadState from "../components/LoadState.jsx";
 import { CopyCard, DriveReturn, DriveSignIn, GoogleSetup, Note, RecoveryKeyDialog, S3Form, useDriveReturn } from "../components/OffsiteParts.jsx";
 
@@ -92,12 +93,14 @@ function GoogleSection({ google, onSaved }) {
 export default function Offsite() {
   const { data, error, loading, reload } = usePolling("/cloud", 4000);
   const [connected, setConnected] = useState(null); // recovery key from connecting a bucket, shown once
+  const [adding, setAdding] = useState(false); // the form for another failsafe is open
+  const failsafes = data?.failsafes ?? (data?.failsafe ? [data.failsafe] : []);
   const { note, choose } = useDriveReturn();
 
   return (
     <div className="w-full">
       <PageHeader title="Off-site">
-        Copies of the backups away from this gateway: a failsafe with everything, and each device&rsquo;s own if it has any.
+        Copies of the backups away from this gateway: failsafes with everything, and each device&rsquo;s own if it has any.
       </PageHeader>
       <Note note={note} />
       <DriveReturn choose={choose} onChanged={reload} />
@@ -108,21 +111,46 @@ export default function Offsite() {
           <section>
             <h2 className="mb-1 flex items-center gap-2 font-medium">
               <ShieldCheck size={18} className="text-good" aria-hidden="true" />
-              Failsafe copy
+              {failsafes.length > 1 ? `Failsafe copies (${failsafes.length})` : "Failsafe copy"}
             </h2>
             <p className="mb-4 max-w-2xl text-sm text-dim">
-              Everything from every device, in one place, all the time. If anything else is lost, this is what you rebuild from.
+              Everything from every device, all the time. If anything else is lost, this is what you rebuild from. Add more than one so a single
+              provider having a problem can&rsquo;t leave you without a copy.
             </p>
-            {data.failsafe ? (
-              <CopyCard s={data.failsafe} google={data.google} onChanged={reload} />
+            {failsafes.length > 0 && (
+              <div className="space-y-4">
+                {failsafes.map((f) => (
+                  <CopyCard key={f.id} s={f} google={data.google} onChanged={reload} />
+                ))}
+              </div>
+            )}
+            {failsafes.length > 0 && !adding ? (
+              <button type="button" className={`${secondaryButton} mt-4 w-full justify-center sm:w-auto`} onClick={() => setAdding(true)}>
+                <Plus size={16} aria-hidden="true" />
+                Add another failsafe copy
+              </button>
             ) : (
-              <SetUpFailsafe
-                google={data.google}
-                onConnected={(result) => {
-                  if (result.recoveryKey) setConnected(result);
-                  reload();
-                }}
-              />
+              <div className={failsafes.length ? "mt-6 rounded-lg border border-edge p-4 sm:p-5" : ""}>
+                {failsafes.length > 0 && (
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <p className="text-sm text-dim">
+                      Another place that also gets everything: a second provider, a bucket in another region, or a Google Drive. Each one keeps
+                      its own full copy.
+                    </p>
+                    <button type="button" className="shrink-0 rounded-md p-1 text-dim hover:text-fg" onClick={() => setAdding(false)} aria-label="Cancel">
+                      <X size={18} />
+                    </button>
+                  </div>
+                )}
+                <SetUpFailsafe
+                  google={data.google}
+                  onConnected={(result) => {
+                    if (result.recoveryKey) setConnected(result);
+                    setAdding(false);
+                    reload();
+                  }}
+                />
+              </div>
             )}
           </section>
 

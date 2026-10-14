@@ -626,6 +626,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         offsite: {
           copies: copies.forDevice(d.id),
           failsafe: !!copies.failsafe(),
+          failsafes: copies.failsafes().length,
           google: googlePublic(),
         },
       };
@@ -885,7 +886,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     if (!body.deviceId) return null;
     return getDeviceOr404(String(body.deviceId)).id;
   }
-  const where = (c) => (c.deviceName ? `${c.client} / ${c.deviceName}` : "failsafe");
+  const where = (c) => (c.deviceName ? `${c.client} / ${c.deviceName}` : c.id === "failsafe" ? "failsafe" : `failsafe ${c.id}`);
 
   // Signing in to Google happens in the browser: POST /cloud/drive/start gives the Google address,
   // and Google sends the person back to /admin/oauth/google on this gateway (oauthCallback below).
@@ -927,6 +928,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       return {
         recoveryFingerprint: copies.recovery()?.fingerprint ?? null,
         failsafe: copies.failsafe(),
+        // Every failsafe copy (everything from every device): as many as you like
+        failsafes: copies.failsafes(),
         copies: copies.list().filter((c) => !c.failsafe),
         providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, { label: v.label }])),
         google: googlePublic(host),
@@ -938,7 +941,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       return { ok: true };
     },
 
-    // A Backblaze/S3 bucket: the failsafe, or (with deviceId) one device's own
+    // A Backblaze/S3 bucket: a failsafe (another one if there are some), or (with deviceId) one device's own
     async "POST /cloud/connect"({ body, admin, ip }) {
       const deviceId = scopeOf(body);
       const settings = cloudSettings(body.settings);
@@ -983,7 +986,6 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       if (resign && resign.kind !== "drive") throw new ApiError(400, "That copy isn't a Google Drive.");
       const g = copies.googleClient();
       if (!g?.clientId || !g?.clientSecret) throw new ApiError(409, "Set up Google sign-in first, on the Off-site page (once).");
-      if (!deviceId && !resign && copies.failsafe()) throw new ApiError(409, "There's already a failsafe copy. Disconnect it first to switch.");
       const redirectUri = redirectUriFor(host);
       const { url, state, verifier } = startSignIn({ clientId: g.clientId, redirectUri });
       for (const [k, v] of signIns) if (v.expires < Date.now()) signIns.delete(k);

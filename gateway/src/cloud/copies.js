@@ -1,7 +1,9 @@
 // Off-site copies. Each one is a "destination":
 //
-//   the failsafe   one place that gets EVERYTHING from every device (a Backblaze/S3 bucket or a
-//                  Google Drive). "Back up everything now" pushes it straight away.
+//   failsafes      places that each get EVERYTHING from every device: as many as you like, e.g. a
+//                  Backblaze bucket, a second S3 provider and a Google Drive, all at once. The first
+//                  has the id "failsafe", the others "f<random>". "Back up everything now" pushes one
+//                  straight away.
 //   device copies  any number per device: that device's own Backblaze bucket (with its own key)
 //                  and/or its own Google Drive. Each backup folder on the device's page picks
 //                  which of them it goes to (see routing.js).
@@ -40,9 +42,9 @@ export function createCopies({ db, dataDir, storage, security = null }) {
   conn.exec(`
     PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS offsite_destinations (
-      id           TEXT PRIMARY KEY,           -- "failsafe", or a random id for a device's copy
+      id           TEXT PRIMARY KEY,           -- "failsafe" / "f<random>" (everything), "d<random>" (a device's copy)
       kind         TEXT NOT NULL CHECK (kind IN ('s3', 'drive')),
-      device_id    TEXT,                       -- NULL = the failsafe (every device)
+      device_id    TEXT,                       -- NULL = a failsafe (every device)
       settings     TEXT NOT NULL,              -- JSON: bucket and key, or Google sign-in and folders
       paused       INTEGER NOT NULL DEFAULT 0,
       connected_at TEXT NOT NULL,
@@ -299,7 +301,10 @@ export function createCopies({ db, dataDir, storage, security = null }) {
   // The name a new folder gets unless the person types another
   function defaultFolderName(deviceId) {
     const who = deviceId ? q.device.get(deviceId) : null;
-    return who ? `Backup Gateway - ${who.client_name} - ${who.device_name}` : "Backup Gateway - failsafe (all devices)";
+    if (who) return `Backup Gateway - ${who.client_name} - ${who.device_name}`;
+    // A second (third...) failsafe on Google Drive gets its own folder
+    const n = list().filter((d) => !d.device_id && d.kind === "drive").length;
+    return n ? `Backup Gateway - failsafe ${n + 1} (all devices)` : "Backup Gateway - failsafe (all devices)";
   }
 
   // The copy's folder in Drive, and its "packs" and "catalogs" folders inside. place is one of:
@@ -395,7 +400,7 @@ export function createCopies({ db, dataDir, storage, security = null }) {
   }
 
   function label(d) {
-    const who = d.device_id ? q.device.get(d.device_id)?.device_name ?? d.device_id : "failsafe";
+    const who = d.device_id ? q.device.get(d.device_id)?.device_name ?? d.device_id : d.id === "failsafe" ? "failsafe" : `failsafe ${d.id}`;
     const where = d.kind === "s3" ? d.settings.bucket : `Google Drive ${d.settings.email ?? ""}`.trim();
     return `${who}: ${where}`;
   }
@@ -495,17 +500,40 @@ export function createCopies({ db, dataDir, storage, security = null }) {
     };
   }
 
+  // Where a copy goes, to recognise the same bucket or folder again
+  const targetOf = (kind, settings) => (kind === "s3" ? `s3 ${settings.endpoint}/${settings.bucket}` : `drive ${settings.rootId}`);
+
+  // The places failsafes went before, and the id each had there: target -> id. Reconnecting one
+  // keeps its id, so what's already uploaded there isn't sent again.
+  function failsafeTargets() {
+    const map = JSON.parse(meta("failsafe_targets") ?? "{}");
+    const old = meta("failsafe_target"); // from when there could only be one
+    if (old && !Object.values(map).includes("failsafe")) map[old] = "failsafe";
+    return map;
+  }
+
+  // The id for a new failsafe on this target, and whether its upload record is still good
+  function failsafeIdFor(target) {
+    const map = failsafeTargets();
+    const before = map[target];
+    if (before && !q.get.get(before)) return { id: before, sameAsBefore: true, map };
+    const used = new Set(Object.values(map));
+    const id = !q.get.get("failsafe") && !used.has("failsafe") ? "failsafe" : `f${crypto.randomBytes(6).toString("hex")}`;
+    return { id, sameAsBefore: false, map };
+  }
+
   function add(kind, deviceId, settings, admin) {
-    if (!deviceId && q.get.get("failsafe")) throw new CopyError("There's already a failsafe copy. Disconnect it first to switch.");
     if (deviceId && !q.device.get(deviceId)) throw new CopyError("That device doesn't exist.");
+    const target = targetOf(kind, settings);
+    if (!deviceId && list().some((d) => !d.device_id && targetOf(d.kind, d.settings) === target)) {
+      throw new CopyError(kind === "s3" ? "That bucket is already a failsafe copy. Use a different bucket." : "That folder is already a failsafe copy. Use a different folder.");
+    }
     const shown = ensureRecovery();
-    const id = deviceId ? `d${crypto.randomBytes(6).toString("hex")}` : "failsafe";
-    // The failsafe back on the same bucket as before: what's there is still there, don't re-send it
-    const target = kind === "s3" ? `s3 ${settings.endpoint}/${settings.bucket}` : `drive ${settings.rootId}`;
-    const sameAsBefore = !deviceId && meta("failsafe_target") === target;
+    const pick = deviceId ? { id: `d${crypto.randomBytes(6).toString("hex")}`, sameAsBefore: false } : failsafeIdFor(target);
+    const { id, sameAsBefore } = pick;
     tx(() => {
       if (!sameAsBefore) q.forget.forEach((s) => s.run(id));
-      if (!deviceId) q.setMeta.run("failsafe_target", target);
+      if (!deviceId) q.setMeta.run("failsafe_targets", JSON.stringify({ ...pick.map, [target]: id }));
       q.add.run(id, kind, deviceId, JSON.stringify(settings), new Date().toISOString(), admin);
     });
     Object.assign(stateOf(id), { cursor: 0, lastFullScan: 0, nextPassAt: Date.now() + 3000, failures: 0, lastError: null, failingSince: null, uploadedSinceCatalog: 1 });
@@ -531,13 +559,16 @@ export function createCopies({ db, dataDir, storage, security = null }) {
       return d ? status(d) : null;
     },
     forDevice: (deviceId) => list().filter((d) => d.device_id === deviceId).map(status),
+    // Every failsafe (everything from every device), the first one connected first
+    failsafes: () => list().filter((d) => !d.device_id).map(status),
+    // The first failsafe, or null (for "is there one at all")
     failsafe: () => {
-      const d = getDest("failsafe");
+      const d = list().find((x) => !x.device_id);
       return d ? status(d) : null;
     },
     raw: getDest,
 
-    // A tested Backblaze/S3 bucket. deviceId null = the failsafe.
+    // A tested Backblaze/S3 bucket. deviceId null = a failsafe (there can be several).
     addS3(settings, deviceId, admin) {
       return add("s3", deviceId, settings, admin);
     },
@@ -545,7 +576,6 @@ export function createCopies({ db, dataDir, storage, security = null }) {
     // A Google sign-in plus the folder chosen for it: sets up the folder and checks a small file
     // goes up, comes back the same, and can be cleaned away, before the copy is saved
     async addDrive({ clientId, clientSecret, refreshToken }, deviceId, admin, place) {
-      if (!deviceId && q.get.get("failsafe")) throw new CopyError("There's already a failsafe copy. Disconnect it first to switch.");
       if (deviceId && !q.device.get(deviceId)) throw new CopyError("That device doesn't exist.");
       if (!place?.folderId) {
         const name = String(place?.name ?? "").trim();
@@ -558,6 +588,9 @@ export function createCopies({ db, dataDir, storage, security = null }) {
       const drive = createDrive({ clientId, clientSecret, refreshToken });
       const about = await drive.about();
       const folders = await driveFolders(drive, place);
+      if (list().some((x) => x.kind === "drive" && x.settings.rootId === folders.rootId)) {
+        throw new CopyError("Another off-site copy already uses that folder. Choose a different one, or make a new folder.");
+      }
       await testDrive(drive, folders.rootId);
       return { ...add("drive", deviceId, { clientId, clientSecret, refreshToken, email: about.email, ...folders }, admin), email: about.email, folderName: folders.folderName };
     },

@@ -19,7 +19,8 @@ export default function DeviceCopies({ device, offsite, onChanged }) {
         This device&rsquo;s own copies away from the gateway.{" "}
         {offsite.failsafe ? (
           <span className="inline-flex items-center gap-1 text-good">
-            <ShieldCheck size={14} aria-hidden="true" /> Everything is also in the failsafe copy.
+            <ShieldCheck size={14} aria-hidden="true" />{" "}
+            {offsite.failsafes > 1 ? `Everything is also in the ${offsite.failsafes} failsafe copies.` : "Everything is also in the failsafe copy."}
           </span>
         ) : (
           "There's no failsafe copy yet (Off-site page)."
