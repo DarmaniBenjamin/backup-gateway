@@ -36,7 +36,7 @@ export default function DeviceCopies({ device, offsite, onChanged }) {
       <div className={`flex flex-wrap gap-2 ${offsite.copies.length ? "mt-4" : ""}`}>
         <button type="button" className={secondaryButton} onClick={() => setAdding("s3")}>
           <HardDrive size={16} aria-hidden="true" />
-          Add a Backblaze bucket
+          Add an S3 bucket (Backblaze, Wasabi…)
         </button>
         <button type="button" className={secondaryButton} onClick={() => setAdding("drive")}>
           <Cloud size={16} aria-hidden="true" />

@@ -28,7 +28,7 @@ function SetUpFailsafe({ google, onConnected }) {
     <div>
       <div className="mb-5 inline-flex rounded-md border border-edge p-1" role="tablist" aria-label="Where the failsafe copy goes">
         {[
-          ["s3", "Backblaze / S3 bucket", HardDrive],
+          ["s3", "S3 storage: Backblaze, Wasabi, Amazon…", HardDrive],
           ["drive", "Google Drive", Cloud],
         ].map(([id, label, Icon]) => (
           <button
