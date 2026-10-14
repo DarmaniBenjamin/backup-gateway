@@ -59,7 +59,10 @@ const updates = createUpdates({ db, dataDir: config.dataDir, agentPackage, updat
 const removals = createRemovals({ db, dataDir: config.dataDir, updateKey, updates, security, broker, store });
 // The gateway's address on the internet and its certificate (Domain & SSL page: Caddy or a Cloudflare Tunnel)
 const address = createAddress({ dataDir: config.dataDir, config, security });
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address });
+// The web UI is also reached through the agent port: by IP until the domain works, then only by
+// https://<domain> (see server.js). adminServer is made below; this is only called later.
+const webUi = (req, res, ip) => adminServer.handle(req, res, ip);
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
 // Alerts by phone push, email or webhook, and the checks for devices offline and disk space

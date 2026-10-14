@@ -319,10 +319,10 @@ CADDYFILE
   if ufw_on; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
     ok "Firewall: ports 80 and 443 open (needed with your own IP, not with a tunnel)"
-    # Port PORT only from private networks: devices on the same network connect straight to it,
-    # the internet only through https
-    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do ufw allow from "$net" to any port "$PORT" proto tcp >/dev/null; done
-    ok "Firewall: port $PORT open to this computer's local networks only"
+    # The agent port too: devices at other sites can connect by IP until the domain works (and fall
+    # back to it if the domain ever has a problem). Their data is encrypted on the device either way.
+    ufw allow "$PORT/tcp" >/dev/null
+    ok "Firewall: port $PORT open for devices"
   fi
 else
   if ufw_on; then ufw allow "$PORT/tcp" >/dev/null; ok "Firewall: port $PORT open"; fi
@@ -380,15 +380,17 @@ else
 fi
 echo
 if [[ $MODE == 1 ]]; then
+  echo "Open the web UI in a browser: http://$(public_ip)  (until the domain is set up)"
   echo "Then, to put it online: open Domain & SSL (in the top bar), and either"
   echo "  - This server has its own IP: enter your domain, add the DNS record it shows, Get certificate"
   if [[ $CADDY_OTHER == yes ]]; then
     echo "    (not on this server: its Caddy belongs to something else)"
   else
-    echo "    (your cloud provider's firewall must allow ports 80 and 443)"
+    echo "    (your cloud provider's firewall must allow ports 80, 443 and $PORT)"
   fi
   echo "  - On site, with a Cloudflare Tunnel: make a tunnel on Cloudflare, paste its token, Connect"
-  echo "Once it says \"Secure, in use\", add devices: Devices > Add device."
+  echo "Once it says \"Secure, in use\", the web UI is at https://<your domain> (by IP it's blocked from then on)."
+  echo "Add devices: Devices > Add device."
 else
   echo "Devices on this network connect to this computer's addresses ($(hostname -I 2>/dev/null | xargs || lan_ip), port $PORT). Add one: Devices > Add device."
 fi

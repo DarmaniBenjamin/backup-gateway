@@ -15,13 +15,15 @@
 //    with the token in its environment (never on its command line, where other users could see
 //    it) and restarts it if it stops.
 //
-// Either way, only the agent port (8080) is reachable through it: the web UI stays on this
-// computer. Devices are only given the new address (the install links) once it's checked to work
-// end to end: DNS, a valid certificate, and the address really reaching this gateway (it answers
-// with a random ID made when the gateway started). Until then they get GATEWAY_PUBLIC_URL from
-// .env, or this computer's own addresses (and those stay on offer beside the domain, for devices on
-// the same network). Devices already installed keep the address they were
-// installed with.
+// The domain is only used once it's checked to work end to end: DNS, a valid certificate, and the
+// address really reaching this gateway (it answers with a random ID made when the gateway started).
+// From then on:
+//   - the web UI is at https://<domain>, and opening it by IP address in a browser is blocked
+//     (server.js), so it's only ever used over https
+//   - new devices are installed with https://<domain>, and devices already installed move to it by
+//     themselves (the address list in their heartbeat, encrypted for each device)
+//   - devices can still connect by IP address, so nothing stops if the domain ever has a problem
+// Until then, devices and the web UI use this computer's IP addresses.
 //
 // The token is kept in the gateway's database and never sent to the web UI or the audit log.
 
@@ -218,6 +220,24 @@ export function createAddress({ dataDir, config, security = null }) {
     });
   }
 
+  // Port 80, for any address that isn't the domain: passed to the gateway, which shows the web UI
+  // before there's a domain and the "use https://<domain>" page after
+  function plainHttpServer(s) {
+    const upstream = `127.0.0.1:${config.port}`;
+    const routes = [];
+    if (s?.mode === "caddy") {
+      routes.push({
+        match: [{ host: [s.domain] }],
+        handle: [{ handler: "static_response", status_code: 308, headers: { Location: ["https://{http.request.host}{http.request.uri}"] } }],
+      });
+    }
+    routes.push({ handle: [{ handler: "reverse_proxy", upstreams: [{ dial: upstream }] }] });
+    return { listen: [":80"], routes };
+  }
+
+  // No domain on Caddy (none yet, or a Cloudflare Tunnel): only the port 80 server
+  const baseConfig = () => ({ apps: { http: { servers: { [`${ID}-http`]: plainHttpServer(null) } } } });
+
   function caddyConfig(s) {
     const upstream = `127.0.0.1:${config.port}`;
     const say = (status, text) => ({ handler: "static_response", status_code: status, headers: { "Content-Type": ["text/plain; charset=utf-8"] }, body: text });
@@ -236,16 +256,7 @@ export function createAddress({ dataDir, config, security = null }) {
               tls_connection_policies: [{}],
               automatic_https: { disable_redirects: true },
             },
-            [`${ID}-http`]: {
-              listen: [":80"],
-              routes: [
-                {
-                  match: [{ host: [s.domain] }],
-                  handle: [{ handler: "static_response", status_code: 308, headers: { Location: ["https://{http.request.host}{http.request.uri}"] } }],
-                },
-                { handle: [say(404, "Not set up on this gateway.\n")] },
-              ],
-            },
+            [`${ID}-http`]: plainHttpServer(s),
           },
         },
         tls: {
@@ -270,10 +281,10 @@ export function createAddress({ dataDir, config, security = null }) {
 
   async function syncCaddy({ force = false } = {}) {
     const s = load();
-    if (s?.mode !== "caddy") return caddy;
     try {
-      const body = JSON.stringify(caddyConfig(s));
-      if (!force && body === lastSent && (await caddyApi(`/id/${ID}`)).ok) {
+      const body = JSON.stringify(s?.mode === "caddy" ? caddyConfig(s) : baseConfig());
+      const probe = s?.mode === "caddy" ? `/id/${ID}` : `/config/apps/http/servers/${ID}-http`;
+      if (!force && body === lastSent && (await caddyApi(probe)).ok) {
         caddy = { reachable: true, configured: true, foreign: false, error: null };
         return caddy;
       }
@@ -285,10 +296,11 @@ export function createAddress({ dataDir, config, security = null }) {
       }
       const res = await caddyApi("/load", { method: "POST", body });
       if (!res.ok) {
+        lastSent = null;
         caddy = { reachable: true, configured: false, foreign: false, error: (await res.text().catch(() => "")).slice(0, 300) || `Caddy answered ${res.status}` };
         return caddy;
       }
-      if (!caddy.configured) log.info(`Caddy is set up for https://${s.domain}`);
+      if (!caddy.configured && s?.mode === "caddy") log.info(`Caddy is set up for https://${s.domain}`);
       lastSent = body;
       caddy = { reachable: true, configured: true, foreign: false, error: null };
     } catch {
@@ -304,7 +316,7 @@ export function createAddress({ dataDir, config, security = null }) {
     try {
       const current = await (await caddyApi("/config/")).json().catch(() => null);
       if (current && !foreignConfig(current) && current?.apps?.http?.servers?.[ID]) {
-        await caddyApi("/load", { method: "POST", body: JSON.stringify({}) });
+        await caddyApi("/load", { method: "POST", body: JSON.stringify(baseConfig()) });
       }
     } catch {
       // Caddy isn't there
@@ -409,16 +421,16 @@ export function createAddress({ dataDir, config, security = null }) {
     const list =
       s.mode === "caddy"
         ? [
-            { id: "added", label: "Address added", done: true },
-            { id: "dns", label: "DNS points here", done: dnsHere || !!s.live },
-            { id: "certificate", label: "Certificate", done: !!c?.certificate.secure || !!s.live },
-            { id: "live", label: "Devices use it", done: !!s.live },
+            { id: "added", label: "Domain added", done: true },
+            { id: "dns", label: "A record points here", done: dnsHere || !!s.live },
+            { id: "certificate", label: "SSL certificate", done: !!c?.certificate.secure || !!s.live },
+            { id: "live", label: "Done", done: !!s.live },
           ]
         : [
             { id: "added", label: "Token added", done: true },
             { id: "tunnel", label: "Tunnel connected", done: tunnel.connected },
-            { id: "certificate", label: "Certificate", done: !!c?.certificate.secure || !!s.live },
-            { id: "live", label: "Devices use it", done: !!s.live },
+            { id: "certificate", label: "SSL certificate", done: !!c?.certificate.secure || !!s.live },
+            { id: "live", label: "Done", done: !!s.live },
           ];
     return list;
   }
@@ -445,6 +457,9 @@ export function createAddress({ dataDir, config, security = null }) {
       caddy: { ...caddy, installed: !!findProgram("caddy") },
       tunnel: { connected: tunnel.connected, running: !!tunnel.proc, error: tunnel.error, installed: !!findProgram("cloudflared") },
       trustProxy: ["1", "true", "yes"].includes(String(process.env.GATEWAY_TRUST_PROXY ?? "").toLowerCase()),
+      // Once it works: the web UI is at https://<domain>, and opening it by IP address is blocked
+      webUiUrl: s?.live ? `https://${s.domain}` : null,
+      ipBlocked: !!s?.live,
     };
     return { ...base, steps: s ? steps(s) : [] };
   }
@@ -454,6 +469,11 @@ export function createAddress({ dataDir, config, security = null }) {
   return {
     view,
     check,
+    // The domain, once it works (null before): the web UI is only served there, over https
+    liveDomain: () => {
+      const s = load();
+      return s?.live ? s.domain : null;
+    },
     // This server's public IP (for the DNS record), looked up once an hour
     lookupIp: serverIp,
     // Caddy's question before it gets a certificate: only for our own domain
@@ -515,13 +535,13 @@ export function createAddress({ dataDir, config, security = null }) {
     // being set up (every 10 minutes once it works)
     start() {
       const s = load();
-      if (s?.mode === "caddy") syncCaddy({ force: true }).catch(() => {});
+      syncCaddy({ force: true }).catch(() => {});
       if (s?.mode === "tunnel") startTunnel();
       let last = 0;
       const timer = setInterval(() => {
+        syncCaddy().catch(() => {});
         const cur = load();
         if (!cur) return;
-        if (cur.mode === "caddy") syncCaddy().catch(() => {});
         if (!cur.live || Date.now() - last > LIVE_CHECK_MS) {
           last = Date.now();
           check().catch(() => {});

@@ -90,16 +90,16 @@ function CopyBox({ id, text, label, large = false }) {
     }
   }
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
       <pre
         id={id}
         className={`min-w-0 flex-1 whitespace-pre-wrap break-all rounded-md border border-edge bg-night px-3 py-2.5 font-mono text-fg ${
-          large ? "text-lg tracking-wider sm:text-xl" : "text-xs leading-relaxed"
+          large ? "text-base tracking-wide sm:text-xl sm:tracking-wider" : "text-xs leading-relaxed"
         }`}
       >
         {text}
       </pre>
-      <button type="button" onClick={copy} className={`${secondaryButton} shrink-0`} aria-label={label}>
+      <button type="button" onClick={copy} className={`${secondaryButton} w-full shrink-0 justify-center sm:w-auto`} aria-label={label}>
         {copied ? <Check size={16} className="text-good" /> : <Copy size={16} />}
         {copied ? "Copied" : "Copy"}
       </button>

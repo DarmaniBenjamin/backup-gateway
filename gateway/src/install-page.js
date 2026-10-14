@@ -96,3 +96,16 @@ export function tooManyPage() {
     `<div class="dead"><h1>Too many wrong links</h1><p>Too many install links that don't exist were tried from this device. Wait 10 minutes, then try again.</p></div>`
   );
 }
+
+// Opening the gateway by IP address in a browser once it has a domain with its certificate: only
+// https://<domain> is used, so passwords and backups are never sent unencrypted
+export function useDomainPage(domain) {
+  const url = `https://${domain}`;
+  return page(
+    "Use the secure address",
+    `<div class="dead"><h1>Access by IP address is turned off</h1>
+<p>This backup gateway is only opened at its secure address now:</p></div>
+<a class="button" href="${esc(url)}">Open ${esc(domain)}</a>
+<p class="note">Bookmark <strong>${esc(url)}</strong> and use it from now on.</p>`
+  );
+}

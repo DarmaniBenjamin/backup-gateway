@@ -85,6 +85,23 @@ keeps backing up exactly those folders and refuses any other list, even from a h
 change them, click **Unlock** and enter the key: the device unlocks for 30 minutes, then locks again by
 itself. Five wrong keys in a row block tries for 15 minutes.
 
+## Domain & SSL
+
+On a cloud server (Linode, say), open the web UI at `http://<server IP>` and go to **Domain & SSL**.
+Type your domain and add the A record it shows at your DNS provider. The progress bar turns green
+step by step: **Domain added**, **A record points here** (checked against public DNS), **SSL
+certificate** (a free Let's Encrypt certificate from Caddy, renewed by itself) and **Done**. Then:
+
+- **Open <domain>** opens the web UI at `https://<domain>` in a new tab.
+- Opening the gateway by IP address in a browser is blocked: it shows a page pointing to the domain.
+- New devices are installed with the domain, and devices already installed move to it by themselves
+  (agent 0.17 or newer). They keep the IP addresses to fall back on, and only ever move to an address
+  that answers with the gateway's own key.
+
+Ports 80, 443 and 8080 must be open in the cloud provider's firewall. A machine on site can use a
+Cloudflare Tunnel instead, with no port to open. If Caddy on the server is already used by something
+else (another app), the gateway leaves it alone: use the tunnel there.
+
 ## Off-site copies (Backblaze B2, other S3 storage, Google Drive)
 
 Every clean backup can also go to the cloud. Everything sent is already encrypted, and quarantined

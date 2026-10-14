@@ -19,7 +19,11 @@ async function readJson(res) {
   }
 }
 
-export function createGatewayClient(gatewayUrl) {
+// gatewayUrl can change while the agent runs: when the gateway gets a domain, or an address stops
+// working (connection.js). Everything that uses this client follows the change.
+export function createGatewayClient(startUrl) {
+  let gatewayUrl = startUrl;
+
   // Sends any signed request. body must be a Buffer.
   async function signedRequest(method, path, body, contentType, { deviceId, privateKey }) {
     const timestamp = String(Date.now());
@@ -75,5 +79,10 @@ export function createGatewayClient(gatewayUrl) {
     signedPutBinary: (path, body, auth) => signedRequest("PUT", path, body, "application/octet-stream", auth),
 
     signedGet: (path, auth) => signedRequest("GET", path, Buffer.alloc(0), "application/octet-stream", auth),
+
+    baseUrl: () => gatewayUrl,
+    setBaseUrl: (url) => {
+      gatewayUrl = url;
+    },
   };
 }

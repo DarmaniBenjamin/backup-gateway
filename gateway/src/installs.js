@@ -482,6 +482,16 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       return { file: windowsSetup, name: setupFileName(agentApiUrl(config, req).url, link.short) };
     },
 
+    // The addresses an installed device can use, best first (sent to devices with their heartbeat):
+    // the domain once it works, then this computer's own network addresses. Not 127.0.0.1, Docker
+    // or VPN bridges.
+    deviceAddresses() {
+      return agentApiChoices(config)
+        .filter((c) => c.kind === "domain" || c.kind === "configured" || c.kind === "lan")
+        .map((c) => c.url)
+        .slice(0, 8);
+    },
+
     // The device enrolled with the code: the link is used up
     codeUsed(codeHash) {
       for (const [token, link] of links) if (link.code && hashCode(link.code) === codeHash) forget(token);

@@ -22,7 +22,7 @@ import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js"
 import { cleanAgentStatus, settingsOf } from "./device-settings.js";
 import { log } from "./logger.js";
 import { HELLO_ID } from "./address.js";
-import { installPage, deadLinkPage, tooManyPage, PAGE_CSP } from "./install-page.js";
+import { installPage, deadLinkPage, tooManyPage, useDomainPage, PAGE_CSP } from "./install-page.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
 const LIMIT_CHUNK = CHUNK_SIZE + 1024;   // one sealed chunk + a little overhead
@@ -69,6 +69,32 @@ function clientIp(req) {
   if (IP_RE.test(cf)) return cf;
   const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((s) => s.trim()).filter(Boolean).pop();
   return forwarded && IP_RE.test(forwarded) ? forwarded : direct;
+}
+
+// The web UI on this port (for other computers): on the gateway's IP addresses until the domain on
+// the Domain & SSL page works, then only at https://<domain>. Set GATEWAY_WEB_UI_ONLINE=0 to keep it
+// on this computer only (http://127.0.0.1:8090), as before.
+const WEB_UI_ONLINE = !["0", "false", "no", "off"].includes(String(process.env.GATEWAY_WEB_UI_ONLINE ?? "").toLowerCase());
+// Paths the agents and installs use; everything else on this port is the web UI
+const AGENT_PATH = /^\/(api|i|install)(\/|$)/;
+
+// The host name the caller asked for (no port), lower case
+function hostName(req) {
+  try {
+    return new URL(`http://${req.headers.host ?? ""}`).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// Came through Caddy or the Cloudflare Tunnel on this computer, over https. Only those can set these
+// headers: a request straight to this port from anywhere else isn't from 127.0.0.1.
+function viaHttpsProxy(req) {
+  return (
+    LOOPBACK.has(req.socket.remoteAddress) &&
+    String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https" &&
+    Boolean(req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"])
+  );
 }
 
 function sendHtml(res, status, html) {
@@ -181,7 +207,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -269,9 +295,14 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
     const uninstall = removal ? seal(k.encKey, Buffer.from(JSON.stringify(removal)), `uninstall:${device.id}`).toString("base64") : null;
     const offer = k && !removal ? updates?.offerFor(device, reportedVersion, agentStatus) : null;
     const update = offer ? seal(k.encKey, Buffer.from(JSON.stringify(offer)), `update:${device.id}`).toString("base64") : null;
+    // Every address the device can reach this gateway at, best first (the domain once it works):
+    // the agent moves to the first one that works and keeps the others to fall back on. Encrypted
+    // for this device, so nobody in between can point it somewhere else.
+    const list = installs?.deviceAddresses?.() ?? [];
+    const addresses = k && list.length ? seal(k.encKey, Buffer.from(JSON.stringify(list)), `addresses:${device.id}`).toString("base64") : null;
     return send(res, 200, {
       ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0,
-      ...(update ? { update } : {}), ...(uninstall ? { uninstall } : {}),
+      ...(update ? { update } : {}), ...(uninstall ? { uninstall } : {}), ...(addresses ? { addresses } : {}),
     });
   }
 
@@ -579,6 +610,21 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
 
       if (req.method === "POST" && url === "/api/enroll") {
         return await handleEnroll(req, res, await readBody(req, LIMIT_SMALL), ip);
+      }
+
+      // The web UI, for everything that isn't an agent path (see WEB_UI_ONLINE above)
+      const pathname = url.split("?")[0];
+      const live = address?.liveDomain?.() ?? null;
+      const onDomain = live && hostName(req) === live && viaHttpsProxy(req);
+      if (!AGENT_PATH.test(pathname) && webUi && WEB_UI_ONLINE) {
+        if (!live || onDomain) return webUi(req, res, ip);
+        // Has a domain, opened some other way (by IP): only the secure address is used
+        return sendHtml(res, 403, useDomainPage(live));
+      }
+      // An install link opened in a browser by IP once there's a domain: the same page, securely
+      if (live && !onDomain && req.method === "GET" && /^\/i\/[A-Za-z0-9]{6}\/?$/.test(pathname)) {
+        res.writeHead(302, { Location: `https://${live}${pathname}`, "Cache-Control": "no-store" });
+        return res.end();
       }
 
       // "Is this the gateway?" The Domain & SSL page checks its address reaches this gateway (address.js)

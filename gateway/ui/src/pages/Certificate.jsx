@@ -1,10 +1,11 @@
-// Domain & SSL: the address devices at client sites use to reach this gateway, with its https
-// certificate (see gateway/src/address.js). Two ways: a server with its own public IP (Caddy gets a
-// free Let's Encrypt certificate), or a machine on site with a Cloudflare Tunnel (no port to open).
-// The steps fill in as they happen; while it's being set up, it checks again every 10 seconds.
+// Domain & SSL: the gateway's domain with its https certificate (see gateway/src/address.js). Two
+// ways: a server with its own public IP (Caddy gets a free Let's Encrypt certificate), or a machine
+// on site with a Cloudflare Tunnel (no port to open). The steps fill in green as they pass: domain
+// added, A record points here, SSL certificate, done. Then the web UI is at https://<domain> (with a
+// link to open it), opening it by IP is blocked, and devices move to the domain by themselves.
 
 import { useEffect, useRef, useState } from "react";
-import { Check, CircleCheck, Cloud, Copy, Globe, LoaderCircle, Lock, RefreshCw, Server, Trash2, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, Cloud, Copy, ExternalLink, Globe, LoaderCircle, Lock, RefreshCw, Server, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "../api.js";
 import { formatDateTime, timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -66,7 +67,7 @@ function Steps({ steps }) {
             ) : (
               <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-current text-[9px]">{i + 1}</span>
             )}
-            <span className="truncate">{s.label}</span>
+            <span className="min-w-0 leading-tight [word-spacing:0.15em]">{s.label}</span>
             <span className="sr-only">{s.done ? "(done)" : i === current ? "(in progress)" : "(to do)"}</span>
           </span>
         </li>
@@ -298,14 +299,43 @@ function Status({ data, reload, checking }) {
         <Steps steps={data.steps} />
 
         {data.live ? (
-          <Note tone="good">
-            <p>
-              New devices are installed with <span className="font-mono">https://{data.domain}</span>.
-              {data.certificate?.issuer &&
-                ` Certificate from ${data.certificate.issuer}${data.certificate.expiresAt ? `, renewed by itself before ${formatDateTime(new Date(data.certificate.expiresAt).toISOString())}` : ""}.`}
-            </p>
-            <p className="text-dim">Devices installed before keep the address they were installed with.</p>
-          </Note>
+          <div className="space-y-4">
+            <Note tone="good">
+              <p>
+                Secure and in use.
+                {data.certificate?.issuer &&
+                  ` Certificate from ${data.certificate.issuer}${data.certificate.expiresAt ? `, renewed by itself before ${formatDateTime(new Date(data.certificate.expiresAt).toISOString())}` : ""}.`}
+              </p>
+            </Note>
+            {data.webUiUrl && (
+              <div className="rounded-lg border border-edge bg-raised/40 p-4">
+                <p className="text-sm text-dim">This web UI is now at</p>
+                <a
+                  href={data.webUiUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`${primaryButton} mt-3 w-full justify-center break-all sm:w-auto`}
+                >
+                  <ExternalLink size={16} className="shrink-0" aria-hidden="true" />
+                  Open {data.domain}
+                </a>
+                <p className="mt-2 text-xs text-dim">Opens in a new tab. Bookmark it and use it from now on.</p>
+              </div>
+            )}
+            <ul className="space-y-2 text-sm text-dim">
+              <li className="flex gap-2">
+                <ShieldCheck size={16} className="mt-0.5 shrink-0 text-good" aria-hidden="true" />
+                <span>Opening this gateway by its IP address in a browser is blocked: it&rsquo;s only used over https now.</span>
+              </li>
+              <li className="flex gap-2">
+                <ShieldCheck size={16} className="mt-0.5 shrink-0 text-good" aria-hidden="true" />
+                <span>
+                  New devices are installed with <span className="break-all font-mono text-fg">https://{data.domain}</span>, and devices already installed
+                  move to it by themselves. They can still connect by IP if the domain ever has a problem.
+                </span>
+              </li>
+            </ul>
+          </div>
         ) : next?.dns ? (
           <div className="space-y-2 text-sm">
             <p className="text-dim">At the company your domain is with, add this DNS record. It can take a few minutes to show up.</p>
@@ -322,8 +352,8 @@ function Status({ data, reload, checking }) {
 
         {!data.trustProxy && (
           <Note tone="warn">
-            This gateway is still set up for this network only. Run <span className="font-mono">sudo bash deploy/install.sh</span> again and choose online,
-            so devices&rsquo; real addresses show up and the agent port stays on this computer.
+            This gateway is still set up for one network only. Run <span className="break-all font-mono">sudo bash deploy/install.sh</span> again and choose
+            online, so the domain works and devices&rsquo; real addresses show up in the logs.
           </Note>
         )}
 
@@ -331,7 +361,7 @@ function Status({ data, reload, checking }) {
           <p className="text-xs text-dim">{data.checkedAt
               ? `Checked ${timeAgo(new Date(data.checkedAt).toISOString())}${data.live ? "" : ", and again every 10 seconds"}`
               : "Checking now"}</p>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:flex">
             <button type="button" className={secondaryButton} onClick={reload} disabled={checking}>
               <RefreshCw size={15} className={checking ? "motion-safe:animate-spin" : ""} />
               Check now
@@ -412,8 +442,8 @@ export default function Certificate() {
   return (
     <div className="w-full">
       <PageHeader title="Domain & SSL certificate">
-        The address devices at your clients use to reach this gateway, over https. Only the agent connection goes through it: this web UI stays on this
-        computer.
+        Give the gateway a domain with a free SSL certificate. Once it&rsquo;s done, this web UI and your devices use it over https, and opening the
+        gateway by its IP address is blocked.
       </PageHeader>
 
       {!data ? (
@@ -428,12 +458,12 @@ export default function Certificate() {
             <p>
               {data.publicUrl ? (
                 <>
-                  Right now devices are installed with <span className="font-mono text-fg">{data.publicUrl}</span>
-                  {data.publicUrl.startsWith("http://") ? ", which only works on this network." : "."}
+                  Right now devices are installed with <span className="break-all font-mono text-fg">{data.publicUrl}</span>, without https.
                 </>
               ) : (
-                "Right now devices can only be installed on this computer: the gateway has no address other devices can reach yet."
-              )}
+                "Right now devices and this web UI use the gateway's IP address, without https."
+              )}{" "}
+              Add a domain to make it secure.
             </p>
           </Note>
           <div className="grid gap-4 sm:grid-cols-2">

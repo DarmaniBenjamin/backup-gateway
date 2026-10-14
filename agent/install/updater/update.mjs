@@ -249,8 +249,12 @@ function farewellDetails() {
     const envFile = win
       ? path.join(path.dirname(conf.dataDir), "agent.env")
       : conf.platform === "linux" ? "/etc/backup-agent/agent.env" : path.join(conf.prefix, "agent.env");
-    const url = fs.readFileSync(envFile, "utf8").match(/^AGENT_GATEWAY_URL=["']?([^"'\r\n]+)["']?\s*$/m)?.[1]?.replace(/\/+$/, "");
-    const deviceId = readJson(path.join(conf.dataDir, "identity.json"))?.deviceId;
+    // The address the agent moved to (the gateway's domain), else the one it was installed with
+    const identity = readJson(path.join(conf.dataDir, "identity.json"));
+    const url =
+      identity?.currentUrl ||
+      fs.readFileSync(envFile, "utf8").match(/^AGENT_GATEWAY_URL=["']?([^"'\r\n]+)["']?\s*$/m)?.[1]?.replace(/\/+$/, "");
+    const deviceId = identity?.deviceId;
     const key = crypto.createPrivateKey(fs.readFileSync(path.join(conf.dataDir, "device-key.pem")));
     return url && /^https?:\/\//.test(url) && deviceId ? { url, deviceId, key } : null;
   } catch {

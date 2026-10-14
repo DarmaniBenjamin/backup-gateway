@@ -1,5 +1,7 @@
 // The admin web server: serves the web UI and the admin API on a SEPARATE port from the agents.
-// Bind it to 127.0.0.1 (or a management VLAN) only — it should never be reachable from the internet.
+// Its own port stays on 127.0.0.1. From other computers the web UI is reached through the agent
+// port (server.js): on the gateway's IP addresses until it has a domain, then only at
+// https://<domain> (opening it by IP is blocked from then on).
 //
 // Protections:
 //   - Session cookie is HttpOnly (JavaScript can't read it) and SameSite=Strict (other sites can't use it)
@@ -187,8 +189,8 @@ export function createAdminServer({ db, store, keys, storage, config, broker, in
   const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address });
   warmStatic();
 
-  return http.createServer(async (req, res) => {
-    const ip = req.socket.remoteAddress;
+  // ip: the caller's real address when the request came through the agent port (server.js)
+  async function handle(req, res, ip = req.socket.remoteAddress) {
     const url = new URL(req.url, "http://localhost");
     const pathname = url.pathname;
 
@@ -249,5 +251,9 @@ export function createAdminServer({ db, store, keys, storage, config, broker, in
       log.error("Admin API error", err);
       return sendJson(res, 500, { error: "Internal error" });
     }
-  });
+  }
+
+  const server = http.createServer((req, res) => handle(req, res));
+  server.handle = handle;
+  return server;
 }
