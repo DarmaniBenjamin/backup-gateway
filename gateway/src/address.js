@@ -18,8 +18,9 @@
 // Either way, only the agent port (8080) is reachable through it: the web UI stays on this
 // computer. Devices are only given the new address (the install links) once it's checked to work
 // end to end: DNS, a valid certificate, and the address really reaching this gateway (it answers
-// with a random ID made when the gateway started). Until then they keep GATEWAY_PUBLIC_URL from
-// .env, or this computer's own address. Devices already installed keep the address they were
+// with a random ID made when the gateway started). Until then they get GATEWAY_PUBLIC_URL from
+// .env, or this computer's own addresses (and those stay on offer beside the domain, for devices on
+// the same network). Devices already installed keep the address they were
 // installed with.
 //
 // The token is kept in the gateway's database and never sent to the web UI or the audit log.

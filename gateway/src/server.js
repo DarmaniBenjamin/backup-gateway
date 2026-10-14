@@ -599,7 +599,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
         if (tooManyShortMisses(ip)) {
           return page ? sendHtml(res, 429, tooManyPage()) : send(res, 429, { error: "Too many wrong install links. Wait 10 minutes." });
         }
-        const link = installs?.shortLink(short);
+        const link = installs?.shortLink(short, req);
         if (!link) {
           tooManyShortMisses(ip, true);
           if (page) return sendHtml(res, 404, deadLinkPage());
@@ -611,7 +611,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
         }
         if (page) return sendHtml(res, 200, installPage(link));
         if (what === "win" || what === "sh") {
-          const r = installs.shortScript(short, what === "win" ? "windows" : "unix", ip);
+          const r = installs.shortScript(short, what === "win" ? "windows" : "unix", ip, req);
           if (r?.wrong) {
             const msg = `This install link is for a ${r.platform === "windows" ? "Windows" : r.platform === "synology" ? "Synology" : "Linux"} device.`;
             return sendText(res, 200, what === "win" ? `Write-Host '${msg}' -ForegroundColor Red\n` : `echo '${msg}' >&2; exit 1\n`);
@@ -619,10 +619,10 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
           return sendText(res, 200, r.script);
         }
         if (what === "setup.json") {
-          const info = installs.setupJson(short, ip);
+          const info = installs.setupJson(short, ip, req);
           return info ? send(res, 200, info) : send(res, 404, { error: "This install link isn't for a Windows device." });
         }
-        const exe = installs.setupExe(short);
+        const exe = installs.setupExe(short, req);
         if (!exe) return send(res, 404, { error: "There's no setup program for this link." });
         res.writeHead(200, {
           "Content-Type": "application/vnd.microsoft.portable-executable",
@@ -639,7 +639,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
         const [, token, file] = match;
         if (file === "linux.sh" || file === "synology.sh" || file === "windows.ps1") {
           const platform = { "linux.sh": "linux", "synology.sh": "synology", "windows.ps1": "windows" }[file];
-          const script = installs?.script(token, platform, ip);
+          const script = installs?.script(token, platform, ip, req);
           // (a dead link still gets a normal reply, so the message reaches the terminal instead of failing silently)
           if (!script) {
             const msg = "This install link has expired or was already used. Create a new one in the web UI (Devices > Add device).";

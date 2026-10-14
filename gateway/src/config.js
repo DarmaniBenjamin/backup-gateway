@@ -32,16 +32,19 @@ export function loadConfig() {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
   const config = {
-    // Agent API — the only part that will ever be reachable from client sites (through the relay)
-    host: process.env.GATEWAY_HOST?.trim() || "127.0.0.1",
+    // Agent API, what devices connect to. Default: every network address of this computer, so devices
+    // on its networks can reach it with nothing set up, plus Caddy or a Cloudflare Tunnel on this
+    // computer for devices elsewhere. Every request is signed by an enrolled device (auth.js); only
+    // enrollment and the one-time install links work without that.
+    host: process.env.GATEWAY_HOST?.trim() || "0.0.0.0",
     port: portSetting("GATEWAY_PORT", 8080),
 
     // Admin web UI + API — for you only. Keep it on 127.0.0.1 or a management VLAN, never the internet.
     adminHost: process.env.GATEWAY_ADMIN_HOST?.trim() || "127.0.0.1",
     adminPort: portSetting("GATEWAY_ADMIN_PORT", 8090),
 
-    // The address devices use to reach the agent API, e.g. http://192.168.1.10:8080 — used in the
-    // one-line install command. Empty = worked out from GATEWAY_HOST.
+    // Normally empty: devices are given this computer's own addresses, and the domain from the
+    // Certificate page once it works (address.js). Set it to force one address for every install.
     publicUrl: publicUrlSetting(),
 
     // The agent's folder (code + installers), packed for one-line installs. Default: ../agent

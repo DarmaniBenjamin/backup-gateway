@@ -5,6 +5,7 @@
 // settings.
 //
 // Each link also has a short form, easy to type on the new device: http://192.168.1.25:8080/i/K7Q2MX
+// (any of the gateway's addresses works, and its domain once the Certificate page has one)
 //   /i/K7Q2MX              a page with the setup program and the command (for a browser)
 //   /i/K7Q2MX/win          the Windows install script:  irm http://…/i/K7Q2MX/win | iex
 //   /i/K7Q2MX/sh           the Linux or Synology one:   curl -fsSL http://…/i/K7Q2MX/sh | sudo bash
@@ -108,31 +109,64 @@ export function cleanInstallOptions(body) {
   return { platform, allowed, fullAccess, name, watch };
 }
 
-// This computer's network addresses other devices could use (for the "only works here" message).
-// Real network cards first; Docker, VM and VPN bridges last.
+// This computer's IPv4 network addresses. Real network cards first; Docker, VM and VPN bridges last.
+const VIRTUAL = /^(docker|br-|veth|virbr|vmnet|vboxnet|tailscale|zt|wg|tun|tap|lxc|lxd|cni|flannel|podman)/i;
 export function lanAddresses() {
-  const virtual = /^(docker|br-|veth|virbr|vmnet|vboxnet|tailscale|zt|wg|tun|tap)/i;
   return Object.entries(os.networkInterfaces())
-    .flatMap(([name, list]) => (list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => ({ name, address: i.address, virtual: virtual.test(name) })))
-    .sort((a, b) => a.virtual - b.virtual)
-    .map(({ name, address }) => ({ name, address }));
+    .flatMap(([name, list]) => (list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => ({ name, address: i.address, virtual: VIRTUAL.test(name) })))
+    .sort((a, b) => a.virtual - b.virtual);
 }
 
-// The address devices use to reach the agent API
-export function agentApiUrl(config) {
-  if (config.publicUrl) return { url: config.publicUrl, localOnly: false };
-  const host = config.host;
-  if (host === "127.0.0.1" || host === "::1" || host === "localhost") {
-    return { url: `http://127.0.0.1:${config.port}`, localOnly: true };
+const LOCAL_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const ALL_HOSTS = new Set(["0.0.0.0", "::"]);
+
+// Every address devices could use to reach the agent API, best first. Nothing to type in .env:
+//   1. config.publicUrl: the domain from the Certificate page once it's checked to work (address.js
+//      sets it: valid certificate, and it really reaches this gateway), or GATEWAY_PUBLIC_URL if set
+//   2. every network address this computer has right now (looked up each time, so a new IP from
+//      DHCP is picked up by itself), when the agent API listens on all of them (GATEWAY_HOST=0.0.0.0)
+export function agentApiChoices(config) {
+  const list = [];
+  if (config.publicUrl) {
+    const https = config.publicUrl.startsWith("https://");
+    list.push({ url: config.publicUrl, label: https ? `${new URL(config.publicUrl).hostname} (secure)` : config.publicUrl.replace(/^https?:\/\//, ""), kind: https ? "domain" : "configured" });
   }
-  if (host === "0.0.0.0" || host === "::") {
-    const lan = Object.values(os.networkInterfaces())
-      .flat()
-      .find((i) => i && i.family === "IPv4" && !i.internal);
-    if (lan) return { url: `http://${lan.address}:${config.port}`, localOnly: false };
-    return { url: `http://127.0.0.1:${config.port}`, localOnly: true };
+  if (ALL_HOSTS.has(config.host)) {
+    for (const a of lanAddresses()) {
+      list.push({ url: `http://${a.address}:${config.port}`, label: `${a.address} (${a.name})`, kind: a.virtual ? "virtual" : "lan" });
+    }
+  } else if (!LOCAL_HOSTS.has(config.host)) {
+    const host = config.host.includes(":") ? `[${config.host}]` : config.host;
+    list.push({ url: `http://${host}:${config.port}`, label: config.host, kind: "lan" });
   }
-  return { url: `http://${host.includes(":") ? `[${host}]` : host}:${config.port}`, localOnly: false };
+  if (!list.length) list.push({ url: `http://127.0.0.1:${config.port}`, label: "This computer only", kind: "local" });
+  return list.filter((c, i) => list.findIndex((o) => o.url === c.url) === i); // the same one twice: keep the first
+}
+
+// The address devices use to reach the agent API. With a request: the address that device used
+// itself, if it's one of the gateway's (a device on 10.0.5.x that opened 10.0.5.2:8080 gets that;
+// one that came through the domain gets the domain). Only the gateway's own addresses are ever
+// used, so a made-up Host header can't point an install somewhere else.
+export function agentApiUrl(config, req = null) {
+  const choices = agentApiChoices(config);
+  const best = { url: choices[0].url, localOnly: choices[0].kind === "local" };
+  let host;
+  try {
+    host = req?.headers?.host ? new URL(`http://${req.headers.host}`) : null;
+  } catch {
+    host = null;
+  }
+  if (!host) return best;
+  const name = host.hostname.toLowerCase();
+  const port = host.port || "80";
+  for (const c of choices) {
+    const u = new URL(c.url);
+    const cPort = u.port || (u.protocol === "https:" ? "443" : "80");
+    // Through Caddy or a Cloudflare Tunnel the Host has no port (or :443)
+    const portOk = cPort === port || (u.protocol === "https:" && (port === "80" || port === "443"));
+    if (u.hostname.toLowerCase() === name && portOk) return { url: c.url, localOnly: c.kind === "local" };
+  }
+  return best;
 }
 
 const q = (s) => `'${s}'`; // safe: every value was checked against SAFE for its platform
@@ -328,11 +362,11 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
   const scriptUrl = (base, token, platform) => `${base}/install/${token}/${SCRIPT_FILES[platform]}`;
   const expiresText = (d) => d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 
-  function scriptFor(token, link, ip) {
+  function scriptFor(token, link, ip, req) {
     log.info(`Install script (${link.options.platform}) for "${link.clientName}" downloaded by ${ip}`);
     store.audit("device", "install-link.used", { clientName: link.clientName, platform: link.options.platform }, ip);
     return SCRIPTS[link.options.platform]({
-      gatewayUrl: agentApiUrl(config).url,
+      gatewayUrl: agentApiUrl(config, req).url,
       token,
       pkg: agentPackage,
       code: link.code,
@@ -357,44 +391,48 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       while (shorts.has(short));
       links.set(token, { code, clientName, expiresAt, options, short });
       shorts.set(short, token);
-      const { url, localOnly } = agentApiUrl(config);
-      const shortUrl = `${url}/i/${short}`;
-      // Only this computer can reach the gateway: say how to open it up, with this computer's addresses
-      const network = localOnly ? { port: config.port, addresses: lanAddresses() } : null;
-      const common = { short, shortUrl, gatewayUrl: url, localOnly, network };
-      if (options.platform === "windows") {
-        const ps = `irm ${shortUrl}/win | iex`;
+      // The same install for each address devices could use (best first: the domain, then this
+      // computer's network addresses). The web UI lets you pick the one the device is on.
+      const choices = agentApiChoices(config).map(({ url, label, kind }) => {
+        const shortUrl = `${url}/i/${short}`;
+        if (options.platform === "windows") {
+          const ps = `irm ${shortUrl}/win | iex`;
+          return {
+            url, label, kind, shortUrl,
+            commands: [
+              { id: "powershell", label: "PowerShell (as Administrator)", command: ps },
+              { id: "cmd", label: "Command Prompt (as Administrator)", command: `powershell -NoProfile -ExecutionPolicy Bypass -Command "${ps}"` },
+            ],
+            setupUrl: windowsSetup ? `${shortUrl}/setup.exe` : null,
+            setupName: windowsSetup ? setupFileName(url, short) : null,
+          };
+        }
         return {
-          platform: "windows",
-          ...common,
-          commands: [
-            { id: "powershell", label: "PowerShell (as Administrator)", command: ps },
-            { id: "cmd", label: "Command Prompt (as Administrator)", command: `powershell -NoProfile -ExecutionPolicy Bypass -Command "${ps}"` },
-          ],
-          setupUrl: windowsSetup ? `${shortUrl}/setup.exe` : null,
-          setupName: windowsSetup ? setupFileName(url, short) : null,
+          url, label, kind, shortUrl,
+          commands: [{ id: "bash", label: options.platform === "synology" ? "SSH" : "Terminal", command: `(curl -fsSL ${shortUrl}/sh || wget -qO- ${shortUrl}/sh) | sudo bash` }],
         };
-      }
-      return {
-        platform: options.platform,
-        ...common,
-        commands: [{ id: "bash", label: options.platform === "synology" ? "SSH" : "Terminal", command: `(curl -fsSL ${shortUrl}/sh || wget -qO- ${shortUrl}/sh) | sudo bash` }],
-      };
+      });
+      const localOnly = choices[0].kind === "local";
+      // Only this computer can reach the gateway: say how to open it up
+      const network = localOnly ? { port: config.port, addresses: lanAddresses().map(({ name, address }) => ({ name, address })) } : null;
+      // The best address's fields at the top level too, for the parts of the UI that show one
+      const { label: _label, kind: _kind, url, ...best } = choices[0];
+      return { platform: options.platform, short, gatewayUrl: url, localOnly, network, choices, ...best };
     },
 
     // GET /install/<token>/linux.sh or windows.ps1 on the agent API
-    script(token, platform, ip) {
+    script(token, platform, ip, req) {
       const link = live(token);
       if (!link || link.options.platform !== platform) return null;
-      return scriptFor(token, link, ip);
+      return scriptFor(token, link, ip, req);
     },
 
     // The short link's details, for its page: null if it's dead
-    shortLink(short) {
+    shortLink(short, req) {
       const token = tokenOf(short);
       const link = token && links.get(token);
       if (!link) return null;
-      const { url } = agentApiUrl(config);
+      const { url } = agentApiUrl(config, req);
       return {
         short: link.short,
         url: `${url}/i/${link.short}`,
@@ -407,23 +445,23 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
     },
 
     // GET /i/<short>/win or /sh: the script for that link (kind: "windows" or "unix")
-    shortScript(short, kind, ip) {
+    shortScript(short, kind, ip, req) {
       const token = tokenOf(short);
       const link = token && links.get(token);
       if (!link) return null;
       const isWindows = link.options.platform === "windows";
       if ((kind === "windows") !== isWindows) return { wrong: true, platform: link.options.platform };
-      return { script: scriptFor(token, link, ip) };
+      return { script: scriptFor(token, link, ip, req) };
     },
 
     // GET /i/<short>/setup.json: what the setup program needs (it checks the package against sha256)
-    setupJson(short, ip) {
+    setupJson(short, ip, req) {
       const token = tokenOf(short);
       const link = token && links.get(token);
       if (!link || link.options.platform !== "windows") return null;
       log.info(`Setup program for "${link.clientName}" started by ${ip}`);
       store.audit("device", "install-link.used", { clientName: link.clientName, platform: "windows", via: "setup program" }, ip);
-      const gatewayUrl = agentApiUrl(config).url;
+      const gatewayUrl = agentApiUrl(config, req).url;
       return {
         client: cleanName(link.clientName),
         expires: expiresText(link.expiresAt),
@@ -437,11 +475,11 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
     },
 
     // GET /i/<short>/setup.exe: the setup program (the same file for everyone) and the name it's saved as
-    setupExe(short) {
+    setupExe(short, req) {
       const token = tokenOf(short);
       const link = token && links.get(token);
       if (!link || link.options.platform !== "windows" || !windowsSetup) return null;
-      return { file: windowsSetup, name: setupFileName(agentApiUrl(config).url, link.short) };
+      return { file: windowsSetup, name: setupFileName(agentApiUrl(config, req).url, link.short) };
     },
 
     // The device enrolled with the code: the link is used up

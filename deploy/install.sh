@@ -177,26 +177,24 @@ CURRENT_URL="$(env_get GATEWAY_PUBLIC_URL)"
 echo "  1) Online: a cloud VM, or a machine on site (you add the domain afterwards, on the web UI)"
 echo "  2) This network only (testing)"
 DEFAULT_MODE=1
-[[ "$CURRENT_URL" == http://* ]] && DEFAULT_MODE=2
+[[ "$CURRENT_URL" == http://* || "$(env_get GATEWAY_TRUST_PROXY)" == 0 ]] && DEFAULT_MODE=2
 ask "Choose 1 or 2" "$DEFAULT_MODE"
 MODE="$REPLY"
 [[ "$MODE" =~ ^[12]$ ]] || die "Choose 1 or 2."
 
 if [[ $MODE == 1 ]]; then
-  # The gateway only listens on this computer: Caddy or the tunnel bring devices to it.
-  # The address itself is set on the Certificate page (it's kept in the gateway's database).
-  env_set GATEWAY_HOST 127.0.0.1
+  # Caddy or the tunnel bring devices from anywhere; devices on this computer's own networks can also
+  # connect straight to it. The domain is set on the Certificate page (kept in the gateway's database).
+  env_set GATEWAY_HOST 0.0.0.0
   env_set GATEWAY_PUBLIC_URL ""
   env_set GATEWAY_TRUST_PROXY 1
-  ok "Online. The address is added on the web UI's Certificate page"
+  ok "Online. The domain is added on the web UI's Certificate page"
 else
-  IP="$(lan_ip)"
-  ask "This computer's address on the network" "$IP"
-  IP="$REPLY"
+  # No address to type: the gateway finds this computer's addresses by itself, every one of them
   env_set GATEWAY_HOST 0.0.0.0
-  env_set GATEWAY_PUBLIC_URL "http://$IP:$PORT"
-  env_set GATEWAY_TRUST_PROXY ""
-  ok "Devices on this network will use http://$IP:$PORT"
+  env_set GATEWAY_PUBLIC_URL ""
+  env_set GATEWAY_TRUST_PROXY 0
+  ok "Devices on this network will use this computer's addresses: $(hostname -I 2>/dev/null | xargs || lan_ip)"
 fi
 # The web UI never leaves this computer
 env_set GATEWAY_ADMIN_HOST 127.0.0.1
@@ -321,6 +319,10 @@ CADDYFILE
   if ufw_on; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
     ok "Firewall: ports 80 and 443 open (needed with your own IP, not with a tunnel)"
+    # Port PORT only from private networks: devices on the same network connect straight to it,
+    # the internet only through https
+    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do ufw allow from "$net" to any port "$PORT" proto tcp >/dev/null; done
+    ok "Firewall: port $PORT open to this computer's local networks only"
   fi
 else
   if ufw_on; then ufw allow "$PORT/tcp" >/dev/null; ok "Firewall: port $PORT open"; fi
@@ -388,6 +390,6 @@ if [[ $MODE == 1 ]]; then
   echo "  - On site, with a Cloudflare Tunnel: make a tunnel on Cloudflare, paste its token, Connect"
   echo "Once it says \"Secure, in use\", add devices: Devices > Add device."
 else
-  echo "Devices on this network connect to $(env_get GATEWAY_PUBLIC_URL). Add one: Devices > Add device."
+  echo "Devices on this network connect to this computer's addresses ($(hostname -I 2>/dev/null | xargs || lan_ip), port $PORT). Add one: Devices > Add device."
 fi
 echo "Check on it:  systemctl status $SERVICE    Logs:  journalctl -u $SERVICE -f"

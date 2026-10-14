@@ -39,7 +39,6 @@ const HOW_TO = {
 // The gateway only listens on 127.0.0.1: an install made now only works on this same computer.
 // Says exactly what to change, with this computer's own addresses filled in.
 function OnlyHere({ network }) {
-  const first = network?.addresses?.[0]?.address;
   const port = network?.port ?? 8080;
   return (
     <div className="mt-5 rounded-md border border-warn/40 bg-warn/10 p-4 text-sm">
@@ -55,24 +54,17 @@ function OnlyHere({ network }) {
         page, then add the device again.
       </p>
       <p className="mt-2 text-dim">
-        The gateway only accepts agents from this computer (127.0.0.1), so another PC, a NAS or a virtual machine can&rsquo;t reach it. To add
-        those on this network, put these two lines in the gateway&rsquo;s .env (replacing the GATEWAY_HOST and GATEWAY_PUBLIC_URL lines there), restart the
-        gateway, and add the device again:
+        The gateway&rsquo;s .env has GATEWAY_HOST=127.0.0.1, so it only accepts agents from this computer: another PC, a NAS or a virtual
+        machine on this network can&rsquo;t reach it. Change that line to this, restart the gateway, and add the device again. Its addresses
+        are then found by themselves, nothing else to type:
       </p>
       <div className="mt-3">
         <CopyBox
           id="network-env"
-          text={`GATEWAY_HOST=0.0.0.0\nGATEWAY_PUBLIC_URL=http://${first ?? "YOUR-GATEWAY-IP"}:${port}`}
-          label="Copy the .env lines"
+          text="GATEWAY_HOST=0.0.0.0"
+          label="Copy the .env line"
         />
       </div>
-      {network?.addresses?.length > 1 && (
-        <p className="mt-2 text-xs text-dim">
-          This computer has more than one address: {network.addresses.map((a) => `${a.address} (${a.name})`).join(", ")}. Use the one the
-          devices are on.
-        </p>
-      )}
-      {!first && <p className="mt-2 text-xs text-dim">Replace YOUR-GATEWAY-IP with this computer&rsquo;s address on the network (ip -4 addr shows it).</p>}
       <p className="mt-3 text-dim">If the gateway computer has a firewall (Omarchy turns one on), let devices reach port {port}:</p>
       <div className="mt-2">
         <CopyBox id="network-ufw" text={`sudo ufw allow ${port}/tcp`} label="Copy the firewall command" />
@@ -127,8 +119,44 @@ function Field({ id, label, hint, children }) {
   );
 }
 
+// Which of the gateway's addresses the device uses: its domain, or one of its network addresses
+function AddressPicker({ choices, value, onChange }) {
+  if (!choices || choices.length < 2) return null;
+  const kind = choices[value]?.kind;
+  return (
+    <div className="mt-5">
+      <p className="text-sm text-dim">The new device reaches this gateway at:</p>
+      <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Gateway address">
+        {choices.map((c, i) => (
+          <button
+            key={c.url}
+            type="button"
+            role="radio"
+            aria-checked={i === value}
+            onClick={() => onChange(i)}
+            className={`rounded-md border px-3 py-1.5 font-mono text-xs ${
+              i === value ? "border-signal bg-signal/10 text-fg" : "border-edge text-dim hover:text-fg"
+            }`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-1.5 text-xs text-dim">
+        {kind === "domain"
+          ? "Secure (https, certificate checked): works from anywhere."
+          : kind === "virtual"
+            ? "A Docker, VM or VPN network: only devices on that network can use it."
+            : "Only for devices on the same network as this address."}
+      </p>
+    </div>
+  );
+}
+
 function Result({ result, onClose }) {
-  const { install } = result;
+  const [choice, setChoice] = useState(0);
+  // The install for the chosen address (the best one first: the domain if there is one)
+  const install = result.install && { ...result.install, ...(result.install.choices?.[choice] ?? {}) };
   return (
     <Modal
       title={install ? "Install command ready" : "Enrollment code"}
@@ -147,6 +175,7 @@ function Result({ result, onClose }) {
       {install ? (
         <>
           {install.localOnly && <OnlyHere network={install.network} />}
+          {!install.localOnly && <AddressPicker choices={result.install.choices} value={choice} onChange={setChoice} />}
           {install.shortUrl && !install.localOnly && (
             <>
               <h3 className="mt-5 font-display text-sm font-semibold text-fg">Short link for the new device</h3>
