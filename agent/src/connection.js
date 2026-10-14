@@ -21,7 +21,7 @@ import { log } from "./logger.js";
 
 const HEARTBEAT_MS = 30_000;
 const LIVE_RETRY_MS = 10_000;
-const FAILS_BEFORE_SWITCH = 3; // about a minute and a half without the gateway
+const OFFLINE_BEFORE_SWITCH_MS = 90_000; // without the gateway this long, try its other addresses
 const RETRY_ADDRESS_MS = 10 * 60_000; // don't try the same address again sooner than this
 
 // An address from the gateway's list: http(s) only, no user name or password in it
@@ -34,6 +34,9 @@ function cleanUrl(value) {
     return null;
   }
 }
+
+// (exported for the tests)
+export { cleanUrl };
 
 export async function connectToGateway(config, getStatus) {
   const keys = loadOrCreateKeys(config.dataDir);
@@ -77,7 +80,7 @@ export async function connectToGateway(config, getStatus) {
   let uninstallHandler = null;
   let onlineHandler = null;
   let stopped = false;
-  let failures = 0;
+  let offlineSince = null; // when the address in use stopped answering
   const tried = new Map(); // address -> when it was last tried
   let moving = false;
 
@@ -106,7 +109,7 @@ export async function connectToGateway(config, getStatus) {
       client.setBaseUrl(url);
       identity.currentUrl = url;
       saveIdentity(config.dataDir, identity);
-      failures = 0;
+      offlineSince = null;
       return true;
     } finally {
       moving = false;
@@ -188,7 +191,7 @@ export async function connectToGateway(config, getStatus) {
       }
 
       if (Number.isInteger(reply.foldersVersion)) foldersHandler?.(reply.foldersVersion);
-      failures = 0;
+      offlineSince = null;
 
       // The addresses this gateway can be reached at, best first, encrypted for this device
       if (reply.addresses) {
@@ -229,8 +232,9 @@ export async function connectToGateway(config, getStatus) {
         log.error(err.message);
       } else {
         if (online !== false) log.warn(`Gateway unreachable (${err.cause?.code || err.message}). Working offline, will keep retrying.`);
-        failures += 1;
-        if (failures >= FAILS_BEFORE_SWITCH) tryOthers().catch(() => {});
+        // Measured in time, not tries: several heartbeats can fail at once right after starting
+        offlineSince ??= Date.now();
+        if (Date.now() - offlineSince >= OFFLINE_BEFORE_SWITCH_MS) tryOthers().catch(() => {});
       }
       online = false;
     }

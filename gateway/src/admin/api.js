@@ -44,6 +44,9 @@ import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
 import { runVerify } from "../verify.js";
 import { verifyPassword, burnTime } from "./passwords.js";
+import { createLoginGuard } from "./login-guard.js";
+import { ALLOWED_IN_LOCKDOWN } from "./lockdown.js";
+import { newSecret, verifyCode, otpauthUrl, newRecoveryCodes, hashRecoveryCode, looksLikeRecoveryCode } from "./totp.js";
 import { REASON_TEXT, describeContent, isText } from "../inspect.js";
 import { cleanInstallOptions } from "../installs.js";
 import { chunkId as makeChunkId, open } from "../crypto-box.js";
@@ -72,18 +75,7 @@ export class ApiError extends Error {
   }
 }
 
-// Brute-force protection: per IP and per username, in memory
-const failures = new Map(); // key -> [timestamps]
-const WINDOW_MS = 15 * 60 * 1000;
-function recentFailures(key) {
-  const now = Date.now();
-  const list = (failures.get(key) || []).filter((t) => now - t < WINDOW_MS);
-  failures.set(key, list);
-  return list;
-}
-function addFailure(key) {
-  recentFailures(key).push(Date.now());
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function deviceStatus(device) {
   if (device.status !== "active") return device.status;
@@ -92,7 +84,45 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null }) {
+  // Wrong passwords: slowed down and blocked per address; an attack turns on lockdown (login-guard.js)
+  const guard = createLoginGuard({
+    onAttack(reason) {
+      log.warn(`Login attack: ${reason}`);
+      security?.event("critical", "admin.login-attack", `The web UI login is under attack: ${reason}`, { detail: { reason } });
+      lockdown?.turnOn(`login attack (${reason})`, "gateway");
+    },
+  });
+  // Two-factor setup waiting for its first code (10 minutes at most): adminId -> { secret, expires }
+  const pendingTwoFactor = new Map();
+  const twoFactorOf = (admin) => {
+    const a = store.adminById(admin.id);
+    return { on: !!a?.totp_secret, recoveryCodesLeft: a?.recovery_codes ? JSON.parse(a.recovery_codes).length : 0, row: a };
+  };
+  async function checkPassword(admin, password) {
+    const a = store.adminById(admin.id);
+    if (!a || !(await verifyPassword(String(password ?? ""), a.password_hash))) throw new ApiError(403, "Wrong password.");
+    return a;
+  }
+  // A code from the authenticator app, or one of the recovery codes (used up). Returns how, or null.
+  function useCode(a, code) {
+    if (!a?.totp_secret) return null;
+    const step = verifyCode(a.totp_secret, code, a.totp_last);
+    if (step !== null) {
+      store.setTotpLast(a.id, step);
+      return "app";
+    }
+    if (looksLikeRecoveryCode(code)) {
+      const left = JSON.parse(a.recovery_codes ?? "[]");
+      const h = hashRecoveryCode(code);
+      if (left.includes(h)) {
+        store.setRecoveryCodes(a.id, left.filter((x) => x !== h));
+        return "recovery code";
+      }
+    }
+    return null;
+  }
+
   const listingCache = new Map(); // folder listings, see GET /devices/:id/files
   function publicDevice(d, stats, storageRows = db.storageStats()) {
     const s = stats?.find((x) => x.device_id === d.id);
@@ -154,27 +184,44 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     async "POST /login"({ body, ip, setSession }) {
       const username = String(body.username ?? "").trim();
       const password = String(body.password ?? "");
-      if (recentFailures(`ip:${ip}`).length >= 10 || recentFailures(`user:${username.toLowerCase()}`).length >= 5) {
+      const why = guard.blocked(ip, username);
+      if (why) {
         store.audit(username || "?", "login.blocked", null, ip);
-        security?.event("high", "admin.login-blocked", `Logins blocked for "${username || "?"}" from ${ip} after repeated wrong passwords`, { detail: { username, ip } });
-        throw new ApiError(429, "Too many failed attempts. Wait 15 minutes and try again.");
+        security?.event("high", "admin.login-blocked", `Logins blocked for "${username || "?"}" from ${ip} after repeated wrong tries`, { detail: { username, ip } });
+        throw new ApiError(429, why);
       }
       const admin = username ? store.adminByName(username) : null;
       const ok = admin ? await verifyPassword(password, admin.password_hash) : (await burnTime(password), false);
+      const failed = async (what, message) => {
+        await sleep(guard.delayMs(ip));
+        guard.failed(ip, username);
+        store.audit(username || "?", what, null, ip);
+        security?.event("medium", "admin.login-failed", `${message} for "${username || "?"}" from ${ip}`, { detail: { username, ip } });
+        log.warn(`Admin login failed (${message.toLowerCase()}) for "${username}" from ${ip}`);
+      };
       if (!ok) {
-        addFailure(`ip:${ip}`);
-        addFailure(`user:${username.toLowerCase()}`);
-        store.audit(username || "?", "login.failed", null, ip);
-        security?.event("medium", "admin.login-failed", `Wrong password for "${username || "?"}" from ${ip}`, { detail: { username, ip } });
-        log.warn(`Admin login failed for "${username}" from ${ip}`);
+        await failed("login.failed", "Wrong password");
         throw new ApiError(401, "Wrong username or password.");
       }
-      failures.delete(`user:${username.toLowerCase()}`);
+      // Two-factor login: the password was right, now the code
+      let via = null;
+      if (admin.totp_secret) {
+        if (!String(body.code ?? "").trim()) return { needsCode: true };
+        via = useCode(admin, body.code);
+        if (!via) {
+          await failed("login.failed-code", "Wrong two-factor code");
+          throw new ApiError(401, "That code isn't right. Codes change every 30 seconds, and each one works once.");
+        }
+      }
+      guard.succeeded(ip, username);
       store.recordLogin(admin.id);
       setSession(admin.id);
-      store.audit(admin.username, "login", null, ip);
-      log.info(`Admin "${admin.username}" logged in from ${ip}`);
-      return { username: admin.username };
+      store.audit(admin.username, "login", via ? { twoFactor: via } : null, ip);
+      if (via === "recovery code") {
+        security?.event("high", "admin.recovery-code", `${admin.username} signed in with a recovery code from ${ip}`, { detail: { username: admin.username, ip } });
+      }
+      log.info(`Admin "${admin.username}" logged in from ${ip}${via ? ` (two-factor: ${via})` : ""}`);
+      return { username: admin.username, twoFactor: !!admin.totp_secret, lockdown: !!lockdown?.isOn() };
     },
 
     "POST /logout"({ admin, ip, clearSession }) {
@@ -184,7 +231,67 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     },
 
     "GET /me"({ admin }) {
-      return { username: admin.username };
+      const tf = twoFactorOf(admin);
+      return { username: admin.username, twoFactor: tf.on, recoveryCodesLeft: tf.recoveryCodesLeft, lockdown: !!lockdown?.isOn() };
+    },
+
+    // ----- Two-factor login (totp.js) -----
+    async "POST /me/2fa/start"({ admin, body }) {
+      await checkPassword(admin, body.password);
+      if (twoFactorOf(admin).on) throw new ApiError(409, "Two-factor login is already on.");
+      const secret = newSecret();
+      pendingTwoFactor.set(admin.id, { secret, expires: Date.now() + 10 * 60_000 });
+      return { secret, otpauth: otpauthUrl(secret, admin.username) };
+    },
+    "POST /me/2fa/confirm"({ admin, body, ip }) {
+      const p = pendingTwoFactor.get(admin.id);
+      if (!p || p.expires < Date.now()) throw new ApiError(410, "That setup expired. Start again.");
+      const step = verifyCode(p.secret, body.code);
+      if (step === null) throw new ApiError(400, "That code isn't right. Check the phone's clock is set automatically, and type the newest code.");
+      const codes = newRecoveryCodes();
+      store.setTwoFactor(admin.id, p.secret, codes.map(hashRecoveryCode));
+      store.setTotpLast(admin.id, step);
+      pendingTwoFactor.delete(admin.id);
+      store.audit(admin.username, "2fa.on", null, ip);
+      security?.event("info", "admin.2fa", `${admin.username} turned on two-factor login`, { detail: { username: admin.username } });
+      return { recoveryCodes: codes };
+    },
+    async "POST /me/2fa/recovery-codes"({ admin, body, ip }) {
+      const a = await checkPassword(admin, body.password);
+      if (!a.totp_secret) throw new ApiError(409, "Two-factor login is off.");
+      if (!useCode(a, body.code)) throw new ApiError(400, "That code isn't right.");
+      const codes = newRecoveryCodes();
+      store.setRecoveryCodes(a.id, codes.map(hashRecoveryCode));
+      store.audit(admin.username, "2fa.new-recovery-codes", null, ip);
+      return { recoveryCodes: codes };
+    },
+    async "POST /me/2fa/disable"({ admin, body, ip }) {
+      const a = await checkPassword(admin, body.password);
+      if (!a.totp_secret) return { ok: true };
+      if (!useCode(a, body.code)) throw new ApiError(400, "That code isn't right.");
+      store.setTwoFactor(a.id, null, null);
+      store.audit(admin.username, "2fa.off", null, ip);
+      security?.event("high", "admin.2fa", `${admin.username} turned off two-factor login`, { detail: { username: admin.username, ip } });
+      return { ok: true };
+    },
+
+    // ----- Lockdown (lockdown.js) -----
+    "GET /lockdown"() {
+      return lockdown ? lockdown.view() : { on: false, liftWithKey: false };
+    },
+    "POST /lockdown"({ admin, body, ip }) {
+      if (!lockdown) throw new ApiError(404, "Not available");
+      lockdown.turnOn(String(body.reason ?? "").trim().slice(0, 200) || "turned on by hand", admin.username, ip);
+      return lockdown.view();
+    },
+    "POST /lockdown/lift"({ admin, body, ip }) {
+      if (!lockdown) throw new ApiError(404, "Not available");
+      try {
+        lockdown.lift(body.recoveryKey, admin.username, ip);
+      } catch (err) {
+        throw new ApiError(400, err.message);
+      }
+      return lockdown.view();
     },
 
     "GET /overview"() {
@@ -785,8 +892,11 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
   const signIns = new Map(); // state -> { verifier, clientId, clientSecret, redirectUri, admin, deviceId, resign, back, expires }
   // Google sends the browser back to this gateway's own loopback address (a "desktop app"
   // sign-in): the address the browser is using now if it's a loopback one
+  // On the gateway's domain (a cloud server): back to https://<domain>, for a "Web application" client
   function redirectUriFor(host) {
     const h = String(host ?? "");
+    const live = address?.liveDomain?.();
+    if (live && h.toLowerCase().replace(/:443$/, "") === live) return `https://${live}/admin/oauth/google`;
     const loopback = /^(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(h) ? h.replace(/^localhost/, "127.0.0.1") : `127.0.0.1:${config.adminPort}`;
     return `http://${loopback}/admin/oauth/google`;
   }
@@ -1056,14 +1166,21 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     const re = new RegExp(
       "^" + pattern.replace(/:[a-zA-Z]+/g, (m) => (names.push(m.slice(1)), "([A-Za-z0-9_-]+)")) + "$"
     );
-    return { method, re, names, handler, isLogin: pattern === "/login" };
+    return { method, re, names, handler, isLogin: pattern === "/login", key };
   });
+
+  // In lockdown, only what's in ALLOWED_IN_LOCKDOWN changes anything (lockdown.js)
+  const lockedHandler = () => {
+    throw new ApiError(423, "Lockdown is on: nothing can be changed or deleted until it's lifted with the recovery key (Security page).");
+  };
 
   function match(method, pathname) {
     for (const r of compiled) {
       if (r.method !== method) continue;
       const m = pathname.match(r.re);
-      if (m) return { handler: r.handler, isLogin: r.isLogin, params: Object.fromEntries(r.names.map((n, i) => [n, m[i + 1]])) };
+      if (!m) continue;
+      const locked = method !== "GET" && lockdown?.isOn() && !ALLOWED_IN_LOCKDOWN.has(r.key);
+      return { handler: locked ? lockedHandler : r.handler, isLogin: r.isLogin, params: Object.fromEntries(r.names.map((n, i) => [n, m[i + 1]])) };
     }
     return null;
   }

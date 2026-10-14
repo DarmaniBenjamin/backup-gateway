@@ -458,8 +458,19 @@ export function GoogleSetup({ google, onSaved }) {
             Google signs the gateway out every 7 days.)
           </li>
           <li>
-            <span className="text-fg">Clients → Create client</span>, type <span className="text-fg">Desktop app</span>. Copy the client ID
-            and secret.
+            {google?.redirectUri?.startsWith("https://") ? (
+              <>
+                <span className="text-fg">Clients → Create client</span>, type <span className="text-fg">Web application</span>. Under{" "}
+                <span className="text-fg">Authorized redirect URIs</span>, add{" "}
+                <span className="break-all font-mono text-fg">{google.redirectUri}</span>. Copy the client ID and secret.
+              </>
+            ) : (
+              <>
+                <span className="text-fg">Clients → Create client</span>, type <span className="text-fg">Desktop app</span>. Copy the client ID
+                and secret. (On a cloud server, set up its domain on Domain &amp; SSL first, and open this page there: then it&rsquo;s a Web
+                application client.)
+              </>
+            )}
           </li>
           <li>
             <span className="text-fg">APIs &amp; Services → Credentials → Create credentials → API key</span>. Restrict it to the Google

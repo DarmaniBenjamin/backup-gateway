@@ -47,12 +47,21 @@ export function openAdminStore(dataDir) {
       value TEXT NOT NULL
     );
   `);
+  // Two-factor login (totp.js), added later: new columns on older databases
+  const cols = new Set(db.prepare("PRAGMA table_info(admins)").all().map((c) => c.name));
+  if (!cols.has("totp_secret")) db.exec("ALTER TABLE admins ADD COLUMN totp_secret TEXT");
+  if (!cols.has("totp_last")) db.exec("ALTER TABLE admins ADD COLUMN totp_last INTEGER NOT NULL DEFAULT -1");
+  if (!cols.has("recovery_codes")) db.exec("ALTER TABLE admins ADD COLUMN recovery_codes TEXT");
 
   const q = {
     countAdmins: db.prepare("SELECT COUNT(*) AS n FROM admins"),
     adminByName: db.prepare("SELECT * FROM admins WHERE username = ?"),
     addAdmin: db.prepare("INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)"),
     setPassword: db.prepare("UPDATE admins SET password_hash = ? WHERE id = ?"),
+    adminById: db.prepare("SELECT * FROM admins WHERE id = ?"),
+    setTotp: db.prepare("UPDATE admins SET totp_secret = ?, totp_last = -1, recovery_codes = ? WHERE id = ?"),
+    setTotpLast: db.prepare("UPDATE admins SET totp_last = ? WHERE id = ?"),
+    setRecoveryCodes: db.prepare("UPDATE admins SET recovery_codes = ? WHERE id = ?"),
     touchLogin: db.prepare("UPDATE admins SET last_login_at = ? WHERE id = ?"),
     addSession: db.prepare(
       "INSERT INTO admin_sessions (token_hash, admin_id, created_at, last_used_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)"
@@ -89,6 +98,14 @@ export function openAdminStore(dataDir) {
       q.deleteAdminSessions.run(adminId); // log out everywhere after a password change
     },
     recordLogin: (adminId) => q.touchLogin.run(new Date().toISOString(), adminId),
+    adminById: (id) => q.adminById.get(id),
+
+    // Two-factor login: the secret, and the hashes of the unused recovery codes (null = off)
+    setTwoFactor: (adminId, secret, recoveryHashes) => {
+      q.setTotp.run(secret, secret ? JSON.stringify(recoveryHashes ?? []) : null, adminId);
+    },
+    setTotpLast: (adminId, step) => q.setTotpLast.run(step, adminId),
+    setRecoveryCodes: (adminId, hashes) => q.setRecoveryCodes.run(JSON.stringify(hashes), adminId),
 
     // Sessions: the browser gets a random token; we only store its SHA-256 hash
     createSession(adminId, ip, userAgent) {

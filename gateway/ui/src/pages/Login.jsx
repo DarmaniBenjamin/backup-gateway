@@ -12,6 +12,8 @@ export default function Login() {
   const location = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [needsCode, setNeedsCode] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -23,11 +25,16 @@ export default function Login() {
     setError("");
     setBusy(true);
     try {
-      await login(username.trim(), password);
+      const next = await login(username.trim(), password, needsCode ? code.trim() : undefined);
+      if (next?.needsCode) {
+        setNeedsCode(true);
+        return;
+      }
       navigate(location.state?.from || "/", { replace: true });
     } catch (err) {
       setError(err.message);
-      setPassword("");
+      if (needsCode) setCode("");
+      else setPassword("");
     } finally {
       setBusy(false);
     }
@@ -47,6 +54,25 @@ export default function Login() {
         </div>
 
         <form onSubmit={handleSubmit} className="glass space-y-4 rounded-lg border border-edge p-6 shadow-2xl" noValidate>
+          {needsCode ? (
+            <div>
+              <label htmlFor="code" className="mb-1.5 block text-sm text-dim">
+                Code from your authenticator app
+              </label>
+              <input
+                id="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                required
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                className={`${inputClass} text-center font-mono text-lg tracking-[0.3em]`}
+              />
+              <p className="mt-1.5 text-xs text-dim">Lost your phone? Type one of your recovery codes instead.</p>
+            </div>
+          ) : (
+          <>
           <div>
             <label htmlFor="username" className="mb-1.5 block text-sm text-dim">
               Username
@@ -75,6 +101,8 @@ export default function Login() {
               className={inputClass}
             />
           </div>
+          </>
+          )}
 
           {error && (
             <p role="alert" className="rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
@@ -84,11 +112,11 @@ export default function Login() {
 
           <button
             type="submit"
-            disabled={busy || !username || !password}
+            disabled={busy || !username || !password || (needsCode && !code.trim())}
             className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-signal font-medium text-signal-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy && <LoaderCircle size={18} className="animate-spin" aria-hidden="true" />}
-            {busy ? "Signing in" : "Sign in"}
+            {busy ? "Signing in" : needsCode ? "Continue" : "Sign in"}
           </button>
         </form>
 

@@ -379,8 +379,17 @@ else
   echo "  http://127.0.0.1:8090 on this computer"
 fi
 echo
+# The one-time setup link: before the domain is set up, the web UI by IP only opens with it
+for _ in $(seq 1 20); do [[ -f "$DATA_DIR/web-setup-key" ]] && break; sleep 0.5; done # made when the gateway starts
+SETUP_KEY="$(cat "$DATA_DIR/web-setup-key" 2>/dev/null | tr -d '[:space:]')"
 if [[ $MODE == 1 ]]; then
-  echo "Open the web UI in a browser: http://$(public_ip)  (until the domain is set up)"
+  if [[ -n $SETUP_KEY ]]; then
+    echo "Open the web UI with this setup link (keep it private):"
+    echo "    http://$(public_ip)/?setup=$SETUP_KEY"
+    echo "  (lost it? cd $GW && sudo npm run setup-link)"
+  else
+    echo "Open the web UI: run  cd $GW && sudo npm run setup-link  for its setup link"
+  fi
   echo "Then, to put it online: open Domain & SSL (in the top bar), and either"
   echo "  - This server has its own IP: enter your domain, add the DNS record it shows, Get certificate"
   if [[ $CADDY_OTHER == yes ]]; then
@@ -392,6 +401,7 @@ if [[ $MODE == 1 ]]; then
   echo "Once it says \"Secure, in use\", the web UI is at https://<your domain> (by IP it's blocked from then on)."
   echo "Add devices: Devices > Add device."
 else
+  [[ -n $SETUP_KEY ]] && echo "Open the web UI with this setup link: http://$(lan_ip):$PORT/?setup=$SETUP_KEY"
   echo "Devices on this network connect to this computer's addresses ($(hostname -I 2>/dev/null | xargs || lan_ip), port $PORT). Add one: Devices > Add device."
 fi
 echo "Check on it:  systemctl status $SERVICE    Logs:  journalctl -u $SERVICE -f"

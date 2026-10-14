@@ -7,11 +7,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import {
-  Activity, AlertOctagon, AlertTriangle, Bug, CircleDot, Info, Pause, Play, Radar, RefreshCw, Search, ShieldAlert,
-  ShieldCheck, ShieldQuestion, Snowflake, Square, X,
-} from "lucide-react";
+import { Activity, AlertOctagon, AlertTriangle, Bug, CircleDot, Info, Pause, Play, Radar, RefreshCw, Search, ShieldAlert, ShieldCheck, ShieldQuestion, Snowflake, Square, X, Lock } from "lucide-react";
 import { api } from "../api.js";
+import { useAuth } from "../auth-context.js";
 import { usePolling } from "../usePolling.js";
 import { formatDateTime, formatSize, timeAgo } from "../format.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -654,6 +652,95 @@ function EnginePanel({ engine, work, reload }) {
 
 // ---- Page ------------------------------------------------------------------------------------
 
+
+// Lockdown (gateway/src/admin/lockdown.js): nothing can be changed or deleted until it's lifted with
+// the recovery key. Turns on by itself when the login is attacked.
+function Lockdown() {
+  const { refresh } = useAuth();
+  const [state, setState] = useState(null);
+  const [key, setKey] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.get("/lockdown").then(setState).catch(() => setState(null));
+  }, []);
+  if (!state) return null;
+  const act = async (path, body) => {
+    setBusy(true);
+    setError("");
+    try {
+      setState(await api.post(path, body));
+      setKey("");
+      setConfirming(false);
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className={`glass mb-6 rounded-lg border p-5 ${state.on ? "border-alert/50" : "border-edge"}`}>
+      <h2 className="flex items-center gap-2 font-medium">
+        <Lock size={17} className={state.on ? "text-alert" : "text-dim"} aria-hidden="true" />
+        Lockdown {state.on ? <span className="text-alert">is on</span> : <span className="text-dim">is off</span>}
+      </h2>
+      {state.on ? (
+        <div className="mt-2 space-y-3 text-sm">
+          <p className="text-dim">
+            Since {formatDateTime(state.since)}: {state.reason}. Nothing can be changed or deleted. Backups keep running, and restores and checks still work.
+          </p>
+          {state.liftWithKey ? (
+            <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => (e.preventDefault(), act("/lockdown/lift", { recoveryKey: key }))}>
+              <input
+                className="h-10 min-w-0 flex-1 rounded-md border border-edge bg-raised px-3 font-mono text-sm text-fg placeholder:text-dim/60 focus:border-signal focus:outline-none"
+                placeholder="BGRK-…"
+                autoComplete="off"
+                spellCheck={false}
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                aria-label="Recovery key"
+              />
+              <button type="submit" className={`${secondaryButton} justify-center`} disabled={busy || !key.trim()}>
+                Lift with the recovery key
+              </button>
+            </form>
+          ) : (
+            <p className="text-dim">
+              There&rsquo;s no recovery key yet, so lift it on the server: <code className="break-all font-mono text-fg">sudo npm run lockdown -- off</code> in the gateway folder.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2 space-y-3 text-sm">
+          <p className="text-dim">
+            During an attack, freeze everything: nothing can be changed or deleted until it&rsquo;s lifted with the recovery key. It turns on by itself if the login
+            is attacked.
+          </p>
+          {confirming ? (
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button type="button" className={`${secondaryButton} justify-center border-alert/50 text-alert`} disabled={busy} onClick={() => act("/lockdown", {})}>
+                Yes, lock it down
+              </button>
+              <button type="button" className={`${secondaryButton} justify-center`} onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button type="button" className={`${secondaryButton} w-full justify-center sm:w-auto`} onClick={() => setConfirming(true)}>
+              <Lock size={15} />
+              Turn on lockdown
+            </button>
+          )}
+          {!state.liftWithKey && <p className="text-xs text-warn">No recovery key yet (it&rsquo;s made with the first off-site copy): lifting would need the server.</p>}
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-alert">{error}</p>}
+    </section>
+  );
+}
+
 export default function Security() {
   const [range, setRange] = useState("24h");
   const [device, setDevice] = useState("");
@@ -676,6 +763,8 @@ export default function Security() {
       >
         Every file is scanned for malware and checked for ransomware as it arrives. Anything caught is held back, never restored or sent off-site.
       </PageHeader>
+
+      <Lockdown />
 
       {!o ? (
         <LoadState loading={loading} error={error} onRetry={reload} />

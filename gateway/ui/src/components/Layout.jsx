@@ -5,7 +5,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
-import { ChevronDown, LogOut, Menu, ShieldAlert, X } from "lucide-react";
+import { ChevronDown, KeyRound, Lock, LogOut, Menu, ShieldAlert, X } from "lucide-react";
 import { useAuth } from "../auth-context.js";
 import { usePolling } from "../usePolling.js";
 import Logo from "./Logo.jsx";
@@ -114,6 +114,15 @@ function AccountMenu({ user, onLogout }) {
       {open && (
         <div role="menu" className="absolute right-0 top-11 z-40 w-48 rounded-lg border border-edge bg-solid p-1.5 shadow-2xl">
           <p className="px-3 py-2 text-xs text-dim">Signed in as {user?.username}</p>
+          <Link
+            to="/account"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex h-9 w-full items-center gap-2 rounded-md px-3 text-sm text-fg hover:bg-raised"
+          >
+            <KeyRound size={15} aria-hidden="true" />
+            Two-factor login
+          </Link>
           <button
             type="button"
             role="menuitem"
@@ -243,10 +252,19 @@ export default function Layout() {
                 {item.label}
               </NavLink>
             ))}
+            <NavLink
+              to="/account"
+              className={({ isActive }) =>
+                `mt-auto flex h-11 items-center gap-2 rounded-md px-3 text-sm ${isActive ? "bg-raised text-fg" : "text-dim hover:bg-raised/60 hover:text-fg"}`
+              }
+            >
+              <KeyRound size={16} aria-hidden="true" />
+              Two-factor login
+            </NavLink>
             <button
               type="button"
               onClick={logout}
-              className="mt-auto flex h-11 items-center gap-2 rounded-md px-3 text-sm text-dim hover:bg-raised hover:text-fg"
+              className="flex h-11 items-center gap-2 rounded-md px-3 text-sm text-dim hover:bg-raised hover:text-fg"
             >
               <LogOut size={16} aria-hidden="true" />
               Log out {user?.username}
@@ -256,6 +274,18 @@ export default function Layout() {
       )}
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+        {user?.lockdown && (
+          <Link to="/security" className="mb-4 flex items-start gap-2.5 rounded-md border border-alert/50 bg-alert/10 px-4 py-3 text-sm text-alert">
+            <Lock size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>Lockdown is on: nothing can be changed or deleted. Backups and restores still work. Lift it with the recovery key on the Security page.</span>
+          </Link>
+        )}
+        {user && !user.twoFactor && (
+          <Link to="/account" className="mb-4 flex items-start gap-2.5 rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+            <KeyRound size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>Two-factor login is off. Turn it on so a stolen password alone can&rsquo;t get into your clients&rsquo; backups.</span>
+          </Link>
+        )}
         <AlertBanner alerts={alerts} onChange={reloadAlerts} />
         <Suspense fallback={null}>
           <Outlet context={{ alerts, reloadAlerts }} />

@@ -185,8 +185,8 @@ function serveStatic(req, res, pathname) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
-export function createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address }) {
-  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address });
+export function createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null }) {
+  const matchRoute = createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown });
   warmStatic();
 
   // ip: the caller's real address when the request came through the agent port (server.js)

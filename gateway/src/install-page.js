@@ -109,3 +109,14 @@ export function useDomainPage(domain) {
 <p class="note">Bookmark <strong>${esc(url)}</strong> and use it from now on.</p>`
   );
 }
+
+// The web UI by IP before there's a domain, without the setup link (setup-key.js)
+export function needSetupLinkPage() {
+  return page(
+    "Setup link needed",
+    `<div class="dead"><h1>Open the setup link</h1>
+<p>This backup gateway doesn't have its domain yet, so its web UI only opens with the setup link the installer printed.</p></div>
+<p>Lost it? On the server, run:</p>
+<pre>cd backup-gateway/gateway &amp;&amp; sudo npm run setup-link</pre>`
+  );
+}

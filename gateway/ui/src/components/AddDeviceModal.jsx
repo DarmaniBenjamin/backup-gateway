@@ -176,6 +176,19 @@ function Result({ result, onClose }) {
         <>
           {install.localOnly && <OnlyHere network={install.network} />}
           {!install.localOnly && <AddressPicker choices={result.install.choices} value={choice} onChange={setChoice} />}
+          {!install.localOnly && install.kind && install.kind !== "domain" && (
+            <div className="mt-3 flex gap-2.5 rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
+              <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <p>
+                Without https, the install isn&rsquo;t protected on its way: on a network you don&rsquo;t trust, someone in between could change it. Use it on networks
+                you trust, or add a domain on{" "}
+                <Link to="/domain" className="underline">
+                  Domain &amp; SSL
+                </Link>{" "}
+                first. (Backups are encrypted on the device either way.)
+              </p>
+            </div>
+          )}
           {install.shortUrl && !install.localOnly && (
             <>
               <h3 className="mt-5 font-display text-sm font-semibold text-fg">Short link for the new device</h3>

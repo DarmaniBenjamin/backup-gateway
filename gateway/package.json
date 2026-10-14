@@ -15,7 +15,11 @@
     "verify": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/verify.js",
     "build-windows-setup": "node scripts/build-windows-setup.js",
     "recover": "node --disable-warning=ExperimentalWarning src/cli/recover.js",
-    "create-admin": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/create-admin.js"
+    "create-admin": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/create-admin.js",
+    "setup-link": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/setup-link.js",
+    "lockdown": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/lockdown.js",
+    "reset-2fa": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/cli/reset-2fa.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
   },
   "engines": {
     "node": ">=22.13"

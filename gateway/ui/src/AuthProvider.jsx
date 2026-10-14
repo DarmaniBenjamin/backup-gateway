@@ -17,10 +17,16 @@ export default function AuthProvider({ children }) {
       .finally(() => setChecking(false));
   }, []);
 
-  const login = useCallback(async (username, password) => {
-    const me = await api.post("/login", { username, password });
-    setUser(me);
+  // Returns { needsCode: true } when two-factor login is on and the code is still to type
+  const login = useCallback(async (username, password, code) => {
+    const me = await api.post("/login", { username, password, ...(code ? { code } : {}) });
+    if (me?.needsCode) return me;
+    setUser(await api.get("/me"));
+    return null;
   }, []);
+
+  // Fresh details (two-factor, lockdown) after changing them
+  const refresh = useCallback(async () => setUser(await api.get("/me")), []);
 
   const logout = useCallback(async () => {
     try {
@@ -30,6 +36,6 @@ export default function AuthProvider({ children }) {
     }
   }, []);
 
-  const value = useMemo(() => ({ user, checking, login, logout }), [user, checking, login, logout]);
+  const value = useMemo(() => ({ user, checking, login, logout, refresh }), [user, checking, login, logout, refresh]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

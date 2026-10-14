@@ -21,6 +21,8 @@ import { createHealth } from "./health.js";
 import { createRemovals } from "./removals.js";
 import { createAddress } from "./address.js";
 import { openAdminStore } from "./admin/admin-store.js";
+import { createLockdown } from "./admin/lockdown.js";
+import { loadOrCreateSetupKey } from "./setup-key.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
 
@@ -62,13 +64,17 @@ const address = createAddress({ dataDir: config.dataDir, config, security });
 // The web UI is also reached through the agent port: by IP until the domain works, then only by
 // https://<domain> (see server.js). adminServer is made below; this is only called later.
 const webUi = (req, res, ip) => adminServer.handle(req, res, ip);
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi });
+// The one-time setup link for the web UI by IP, before the domain works (setup-key.js)
+const setupKey = loadOrCreateSetupKey(config.dataDir);
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi, setupKey });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
 // Alerts by phone push, email or webhook, and the checks for devices offline and disk space
 const notify = createNotify({ db, dataDir: config.dataDir, security });
 const health = createHealth({ db, dataDir: config.dataDir, security, settings: notify.settings, skipDevice: removals.inProgress });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address });
+// Lockdown: nothing can be changed or deleted until it's lifted with the recovery key (admin/lockdown.js)
+const lockdown = createLockdown({ store, security, copies });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown });
 copies.start();
 notify.start();
 security.start({ pendingCleared: () => copies.syncNow() });
@@ -78,8 +84,10 @@ const removalTimer = setInterval(() => removals.tick(), 30_000);
 removalTimer.unref();
 // Removed devices deleted for good N days after they were removed, if that's on (Devices page)
 removals.start({ copies, dataDir: config.dataDir });
-setTimeout(() => removals.autoDeleteTick(), 60_000).unref();
-setInterval(() => removals.autoDeleteTick(), 60 * 60_000).unref();
+// (not in lockdown: nothing is deleted then, not even by itself)
+const autoDelete = () => !lockdown.isOn() && removals.autoDeleteTick();
+setTimeout(autoDelete, 60_000).unref();
+setInterval(autoDelete, 60 * 60_000).unref();
 
 function onListenError(name, port) {
   return (err) => {

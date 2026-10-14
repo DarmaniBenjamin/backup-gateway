@@ -22,7 +22,8 @@ import { isValidDevicePath, isValidFolderName, newFolderId } from "./folders.js"
 import { cleanAgentStatus, settingsOf } from "./device-settings.js";
 import { log } from "./logger.js";
 import { HELLO_ID } from "./address.js";
-import { installPage, deadLinkPage, tooManyPage, useDomainPage, PAGE_CSP } from "./install-page.js";
+import { installPage, deadLinkPage, tooManyPage, useDomainPage, needSetupLinkPage, PAGE_CSP } from "./install-page.js";
+import { SETUP_COOKIE, isSetupKey, isSetupCookie, setupCookieValue } from "./setup-key.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
 const LIMIT_CHUNK = CHUNK_SIZE + 1024;   // one sealed chunk + a little overhead
@@ -95,6 +96,17 @@ function viaHttpsProxy(req) {
     String(req.headers["x-forwarded-proto"] ?? "").toLowerCase() === "https" &&
     Boolean(req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"])
   );
+}
+
+// Straight from this computer (not through Caddy or the tunnel)
+const fromThisComputer = (req) => LOOPBACK.has(req.socket.remoteAddress) && !req.headers["x-forwarded-for"] && !req.headers["cf-connecting-ip"];
+
+function cookieOf(req, name) {
+  for (const part of String(req.headers.cookie ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return null;
 }
 
 function sendHtml(res, status, html) {
@@ -207,7 +219,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -617,9 +629,27 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
       const live = address?.liveDomain?.() ?? null;
       const onDomain = live && hostName(req) === live && viaHttpsProxy(req);
       if (!AGENT_PATH.test(pathname) && webUi && WEB_UI_ONLINE) {
-        if (!live || onDomain) return webUi(req, res, ip);
+        if (onDomain) {
+          // Browsers that have been here once refuse plain http for the domain from then on
+          res.setHeader("Strict-Transport-Security", "max-age=31536000");
+          return webUi(req, res, ip);
+        }
         // Has a domain, opened some other way (by IP): only the secure address is used
-        return sendHtml(res, 403, useDomainPage(live));
+        if (live) return sendHtml(res, 403, useDomainPage(live));
+        // No domain yet: by IP, only with the setup link the installer printed (setup-key.js)
+        if (!setupKey || fromThisComputer(req) || isSetupCookie(setupKey, cookieOf(req, SETUP_COOKIE))) return webUi(req, res, ip);
+        const given = new URL(url, "http://x").searchParams.get("setup");
+        if (given && isSetupKey(setupKey, given)) {
+          log.info(`Setup link opened from ${ip}`);
+          res.writeHead(302, {
+            Location: pathname,
+            "Set-Cookie": `${SETUP_COOKIE}=${setupCookieValue(setupKey)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`,
+            "Cache-Control": "no-store",
+          });
+          return res.end();
+        }
+        if (given) log.warn(`Wrong setup link tried from ${ip}`);
+        return sendHtml(res, 403, needSetupLinkPage());
       }
       // An install link opened in a browser by IP once there's a domain: the same page, securely
       if (live && !onDomain && req.method === "GET" && /^\/i\/[A-Za-z0-9]{6}\/?$/.test(pathname)) {
