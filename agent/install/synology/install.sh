@@ -13,7 +13,9 @@
 # Everything lives on the data volume, in a hidden system folder that isn't a shared folder and
 # survives DSM updates (the system partition is small and can be reset by an update):
 #   /volumeN/@backup-agent/app        the agent's code
-#   /volumeN/@backup-agent/node       Node.js, if Package Center's Node.js v22 isn't installed
+#   /volumeN/@backup-agent/node       Node.js, if Package Center's Node.js v22 isn't installed: the
+#                                     official build, or (when DSM is too old for it) the Node.js
+#                                     project's build for older systems
 #   /volumeN/@backup-agent/agent.env  settings (root only)
 #   /volumeN/@backup-agent/data       the agent's database and private keys (root only)
 #   /volumeN/@backup-agent/agent.log  the agent's log
@@ -26,6 +28,9 @@ main() {
   SERVICE=backup-agent
   UNIT=/etc/systemd/system/$SERVICE.service
   NODE_DIST=${NODE_DIST:-https://nodejs.org/dist/latest-v22.x}
+  # The Node.js project's builds for older systems (glibc 2.17+): DSM's own glibc is too old for the
+  # official build. Same SHA-256 check, from the project's unofficial-builds server. x64 only.
+  NODE_OLD_DIST=${NODE_OLD_DIST:-https://unofficial-builds.nodejs.org/download/release}
   PKG_NODE=/var/packages/Node.js_v22/target/usr/local/bin/node
   SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
@@ -216,22 +221,43 @@ EOF
       aarch64 | arm64) ARCH=arm64 ;;
       *) die "no ready-made Node.js for this NAS's processor ($(uname -m)). Install Node.js v22 from Package Center, then run this again." ;;
     esac
-    bold "Downloading Node.js 22 ($ARCH)..."
-    local TARBALL SUM
     TMP=$(mktemp -d) # not local: the clean-up below runs after main() returns
     trap 'rm -rf "${TMP:-}"' EXIT
-    download "$NODE_DIST/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
-    TARBALL=$(grep -oE "node-v22\.[0-9]+\.[0-9]+-linux-$ARCH\.tar\.gz" "$TMP/SHASUMS256.txt" | head -n1)
-    [ -n "$TARBALL" ] || die "couldn't find the Node.js download in the official list."
-    SUM=$(grep " $TARBALL\$" "$TMP/SHASUMS256.txt" | cut -d' ' -f1)
-    download "$NODE_DIST/$TARBALL" "$TMP/$TARBALL"
-    sha256_ok "$TMP/$TARBALL" "$SUM" || die "the Node.js download failed its SHA-256 check. Nothing was installed."
+
+    # Downloads one Node.js 22 build into $TMP/node and checks it against its SHA-256 list.
+    # $1: where its SHASUMS256.txt is, $2: the file name pattern after "node-v22.x.y-"
+    fetch_node() {
+      local TARBALL SUM
+      rm -rf "$TMP/node" "$TMP"/*.tar.gz
+      download "$1/SHASUMS256.txt" "$TMP/SHASUMS256.txt"
+      TARBALL=$(grep -oE "node-v22\.[0-9]+\.[0-9]+-$2\.tar\.gz" "$TMP/SHASUMS256.txt" | head -n1)
+      [ -n "$TARBALL" ] || die "couldn't find the Node.js download in its list ($1)."
+      SUM=$(grep " $TARBALL\$" "$TMP/SHASUMS256.txt" | cut -d' ' -f1)
+      download "$1/$TARBALL" "$TMP/$TARBALL"
+      sha256_ok "$TMP/$TARBALL" "$SUM" || die "the Node.js download failed its SHA-256 check. Nothing was installed."
+      mkdir -p "$TMP/node"
+      tar -xzf "$TMP/$TARBALL" -C "$TMP/node" --strip-components=1 --no-same-owner
+    }
+
+    bold "Downloading Node.js 22 ($ARCH)..."
+    fetch_node "$NODE_DIST" "linux-$ARCH"
     ok "Node.js download verified (SHA-256)"
-    mkdir -p "$TMP/node"
-    tar -xzf "$TMP/$TARBALL" -C "$TMP/node" --strip-components=1 --no-same-owner
-    "$TMP/node/bin/node" -e 0 2>/dev/null ||
-      die "the official Node.js doesn't run on this DSM version. Install Node.js v22 from Package Center
+    if ! "$TMP/node/bin/node" -e 0 2>/dev/null; then
+      # Too old a system library (glibc) on this DSM for the official build
+      [ "$ARCH" = x64 ] || die "Node.js doesn't run on this DSM version. Install Node.js v22 from Package Center
        (Package Center → search \"Node.js\" → Node.js v22), then run this again."
+      echo "  This DSM is too old for the standard build: getting the one for older systems instead"
+      # The newest Node.js 22 that has a build for older systems (it can come a few days after the official one)
+      local OLD_VERSION
+      download "$NODE_OLD_DIST/index.tab" "$TMP/index.tab"
+      OLD_VERSION=$(awk -F'\t' '$1 ~ /^v22\./ && $3 ~ /linux-x64-glibc-217/ {print $1; exit}' "$TMP/index.tab")
+      [ -n "$OLD_VERSION" ] || die "couldn't find a Node.js 22 build for older systems. Install Node.js v22 from Package Center, then run this again."
+      fetch_node "$NODE_OLD_DIST/$OLD_VERSION" "linux-x64-glibc-217"
+      ok "Node.js $OLD_VERSION for older systems verified (SHA-256)"
+      "$TMP/node/bin/node" -e 0 2>/dev/null ||
+        die "Node.js doesn't run on this DSM version. Install Node.js v22 from Package Center
+       (Package Center → search \"Node.js\" → Node.js v22), then run this again."
+    fi
     mkdir -p "$PREFIX"
     rm -rf "$PREFIX/node.new"
     mv "$TMP/node" "$PREFIX/node.new"
