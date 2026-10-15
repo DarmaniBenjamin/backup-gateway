@@ -16,6 +16,7 @@
 
 import net from "node:net";
 import fs from "node:fs";
+import os from "node:os";
 import { log } from "./logger.js";
 
 const KNOWN_SOCKETS = ["/run/clamav/clamd.ctl", "/var/run/clamav/clamd.ctl", "/run/clamd.scan/clamd.sock", "/var/run/clamd.scan/clamd.sock"];
@@ -56,7 +57,14 @@ export function createScanner(setting = process.env.GATEWAY_CLAMAV) {
   // One short command ("zVERSION", "zPING"), one reply
   function command(a, cmd, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
-      if (a.path && !fs.existsSync(a.path)) return reject(Object.assign(new Error("no socket"), { code: "ENOENT" }));
+      if (a.path) {
+        // stat, not existsSync: a folder this user can't open must say "not allowed", not "not there"
+        try {
+          fs.statSync(a.path);
+        } catch (err) {
+          return reject(Object.assign(new Error(err.code === "ENOENT" ? "no socket" : err.message), { code: err.code }));
+        }
+      }
       const sock = connect(a);
       const parts = [];
       sock.setTimeout(timeoutMs, () => sock.destroy(new Error("ClamAV didn't answer in time")));
@@ -67,11 +75,37 @@ export function createScanner(setting = process.env.GATEWAY_CLAMAV) {
     });
   }
 
+  // Why ClamAV can't be used, in words that say what to do. The most telling failure wins: a socket
+  // that's there but refuses this user says more than the addresses that simply don't exist.
+  let lastLogged = null;
+  function whyNot(tries) {
+    const user = (() => {
+      try {
+        return os.userInfo().username;
+      } catch {
+        return "the gateway's user";
+      }
+    })();
+    const denied = tries.find((e) => e.code === "EACCES" || e.code === "EPERM");
+    if (denied) {
+      return `ClamAV is running, but the gateway (user ${user}) isn't allowed to use its socket ${describe(denied.address)}. Add ${user} to the clamav group (sudo usermod -aG clamav ${user}) and restart the gateway.`;
+    }
+    const socketThere = tries.find((e) => e.address?.path && e.code !== "ENOENT");
+    if (socketThere) return `ClamAV's socket ${describe(socketThere.address)} is there but isn't answering (${socketThere.message}). It may still be loading its signatures: that takes a minute or two after it starts, longer with little memory.`;
+    const tcp = tries.find((e) => e.address?.host && e.code !== "ECONNREFUSED");
+    if (tcp) return `ClamAV at ${describe(tcp.address)} isn't answering (${tcp.message}).`;
+    if (parsed) return `ClamAV isn't answering at ${describe(parsed)}: ${tries[0]?.message ?? "no reply"}.`;
+    return state.everSeen
+      ? "ClamAV stopped: its socket is gone. Check it's running (systemctl status clamav-daemon); it may be loading its signatures, or out of memory."
+      : "ClamAV isn't running on this gateway (no socket at its usual places). If it's installed, it may still be loading its signatures, or be stopping for lack of memory: systemctl status clamav-daemon";
+  }
+
   // Is ClamAV there, and which signatures does it have? Called every few minutes by the monitor.
   async function check() {
     if (off) return status();
     const order = address ? [address, ...candidates.filter((c) => c !== address)] : candidates;
     let lastErr = null;
+    const tries = []; // why each address didn't work
     for (const a of order) {
       try {
         const reply = await command(a, "VERSION");
@@ -82,13 +116,17 @@ export function createScanner(setting = process.env.GATEWAY_CLAMAV) {
         state.checkedAt = new Date().toISOString();
         return status();
       } catch (err) {
+        err.address = a;
+        tries.push(err);
         lastErr = err;
       }
     }
     if (state.available) log.error(`Antivirus: ClamAV stopped answering (${lastErr?.message})`);
     state.available = false;
     state.checkedAt = new Date().toISOString();
-    state.error = state.everSeen || parsed ? `ClamAV isn't answering at ${describe(address ?? candidates[0])}: ${lastErr?.message}` : "ClamAV isn't installed on this gateway.";
+    state.error = whyNot(tries);
+    if (state.error !== lastLogged) log.warn(`Antivirus: ${state.error}`);
+    lastLogged = state.error;
     return status();
   }
 

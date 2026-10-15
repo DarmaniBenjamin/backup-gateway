@@ -150,6 +150,11 @@ else
   fi
 fi
 
+# The gateway's user may use ClamAV's socket (some setups only allow the clamav group)
+if getent group clamav >/dev/null && ! id -nG "$APP_USER" 2>/dev/null | tr ' ' '\n' | grep -qx clamav; then
+  usermod -aG clamav "$APP_USER" && ok "The gateway's user ($APP_USER) can use ClamAV"
+fi
+
 # ---------------------------------------------------------------------
 step "3/7 Settings and where the backups are kept"
 if [[ ! -f "$ENV_FILE" ]]; then
