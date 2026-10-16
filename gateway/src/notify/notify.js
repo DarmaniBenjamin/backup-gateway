@@ -37,6 +37,7 @@ export const CATEGORIES = [
   { id: "quarantine", label: "Quarantine decisions", match: ["quarantine."] },
   { id: "agents", label: "Agent updates and uninstalls", match: ["agent."] },
   { id: "logins", label: "Web UI logins", match: ["admin."] },
+  { id: "health", label: "Device health: shutdowns, crashes, updates, disks, RAID", match: ["health."] },
 ];
 export const DEFAULT_SETTINGS = { gatewayName: os.hostname() || "Backup gateway", offlineHours: 24, diskPercent: 10 };
 
@@ -286,6 +287,22 @@ export function createNotify({ db, dataDir, security, deliverFn = deliver }) {
   };
   const now = () => new Date().toISOString();
   const row = (r) => r && { ...r, settings: JSON.parse(r.settings), categories: JSON.parse(r.categories) };
+  // New kinds of event added later (Device health): channels that already took every kind get them too.
+  // Each new kind is added once, so a channel that later unticks it keeps it unticked.
+  {
+    const added = JSON.parse(q.getMeta.get("categories_known")?.value ?? "null") ?? CATEGORIES.filter((c) => c.id !== "health").map((c) => c.id);
+    const fresh = CATEGORIES.map((c) => c.id).filter((id) => !added.includes(id));
+    if (fresh.length) {
+      for (const r of conn.prepare("SELECT id, categories FROM notify_channels").all()) {
+        const cats = JSON.parse(r.categories);
+        if (added.every((id) => cats.includes(id))) {
+          conn.prepare("UPDATE notify_channels SET categories = ? WHERE id = ?").run(JSON.stringify([...new Set([...cats, ...fresh])]), r.id);
+        }
+      }
+    }
+    q.setMeta.run("categories_known", JSON.stringify(CATEGORIES.map((c) => c.id)));
+  }
+
   // This gateway's own ID, made once, sent with webhook alerts
   let gatewayId = q.getMeta.get("gateway_id")?.value;
   if (!gatewayId) {

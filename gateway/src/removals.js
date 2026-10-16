@@ -205,6 +205,7 @@ export function createRemovals({ db, dataDir, updateKey, updates, security, brok
         ["device_folders", "DELETE FROM device_folders WHERE device_id = ?"],
         ["agent_updates", "DELETE FROM agent_updates WHERE device_id = ?"],
         ["device_health", "DELETE FROM device_health WHERE device_id = ?"],
+        ["device_condition", "DELETE FROM device_condition WHERE device_id = ?"],
         ["offsite_objects", "DELETE FROM offsite_objects WHERE device_id = ?"],
         ["offsite_destinations", "DELETE FROM offsite_destinations WHERE device_id = ?"],
         ["device_removals", "DELETE FROM device_removals WHERE device_id = ?"],

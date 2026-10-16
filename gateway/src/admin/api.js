@@ -84,7 +84,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null, deviceHealth = null }) {
   // Wrong passwords: slowed down and blocked per address; an attack turns on lockdown (login-guard.js)
   const guard = createLoginGuard({
     onAttack(reason) {
@@ -622,6 +622,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         folders: db.listFolders(d.id).map(publicFolder),
         settings: settingsOf(d),
         agentStatus: agentStatusOf(d),
+        // Device health: what's wrong now, and its disks, CPU and memory (device-health.js)
+        health: deviceHealth?.view(d.id) ?? null,
         // This device's own off-site copies, and whether the failsafe (everything) is set up
         offsite: {
           copies: copies.forDevice(d.id),

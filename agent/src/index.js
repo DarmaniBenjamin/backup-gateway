@@ -6,6 +6,7 @@ import { openDatabase } from "./db.js";
 import { createTracker } from "./tracker.js";
 import { startWatcher } from "./watcher.js";
 import { connectToGateway } from "./connection.js";
+import { createHealth } from "./health.js";
 import { createUploader } from "./uploader.js";
 import { createRestorer } from "./restorer.js";
 import { createFolderManager } from "./folders.js";
@@ -90,6 +91,10 @@ enqueue(() => {
   uploader?.trigger();
 });
 
+// Device health: shutdowns, updates, disks... (health.js), sent with the heartbeat
+const health = createHealth({ dataDir: config.dataDir, deviceName: config.deviceName });
+health.start();
+
 // 2) Connect to the gateway (enroll the first time, then heartbeats)
 let connection = null;
 try {
@@ -99,7 +104,9 @@ try {
     pendingChanges: db.countPending(),
     folders: folders.report(),
     background: { ...policy.status(), ...folders.scanStatus(), lock: lock.status(), fullAccess: config.fullAccess, dsmExport: dsmExport.status(), update: updater.status(), uninstall: updater.uninstallStatus() },
+    health: health.report(),
   }));
+  connection.onReply((reply) => health.ack(reply.healthAck));
 } catch (err) {
   log.error(err.message);
   log.error("Fix the problem above and restart the agent. Backups are still being tracked locally.");
@@ -130,6 +137,8 @@ if (connection) {
 // Shut down cleanly on Ctrl+C or when the system stops the service
 async function shutdown(signal) {
   log.info(`Received ${signal}, shutting down...`);
+  health.markCleanStop(); // stopped properly (shutdown, restart, update): not a power loss
+  health.stop();
   uploader?.stop();
   policy.stop();
   connection?.stop();

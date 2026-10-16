@@ -81,6 +81,7 @@ export async function connectToGateway(config, getStatus) {
   let onlineHandler = null;
   let stopped = false;
   let offlineSince = null; // when the address in use stopped answering
+  let replyHandler = null; // told about every heartbeat reply (health.js: which events arrived)
   const tried = new Map(); // address -> when it was last tried
   let moving = false;
 
@@ -192,6 +193,11 @@ export async function connectToGateway(config, getStatus) {
 
       if (Number.isInteger(reply.foldersVersion)) foldersHandler?.(reply.foldersVersion);
       offlineSince = null;
+      try {
+        replyHandler?.(reply);
+      } catch (err) {
+        log.warn(`Heartbeat reply handler failed: ${err.message}`);
+      }
 
       // The addresses this gateway can be reached at, best first, encrypted for this device
       if (reply.addresses) {
@@ -267,6 +273,9 @@ export async function connectToGateway(config, getStatus) {
     isOnline: () => online === true,
     onCommand: (fn) => {
       commandHandler = fn;
+    },
+    onReply: (fn) => {
+      replyHandler = fn;
     },
     onFoldersVersion: (fn) => {
       foldersHandler = fn;

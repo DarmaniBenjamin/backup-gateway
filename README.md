@@ -227,6 +227,34 @@ permissions, network, services) once a day with Synology's own tool into
 adds that folder, so every day's export is kept as a version. To put settings back: DSM, Control
 Panel > Update & Restore > Configuration Backup > Restore, with the restored .dss file.
 
+## Device health monitoring
+
+Besides backing up, the agent watches how each device is doing, every few minutes, and the gateway
+turns what it finds into alerts (category **Device health** on the Alerts page). It only reads
+system health information, never the content of files.
+
+| | Windows | Linux | Synology |
+|---|---|---|---|
+| Shut down without warning (power loss, cable pulled, froze) | Windows' own records | No clean stop before the new boot | Same as Linux |
+| Crashed (blue screen) | Yes | | |
+| Restarted | Yes | Yes | Yes |
+| Windows Update failed, restart pending | Yes | Restart needed after updates | |
+| Disk almost full (below 10 %, critical below 3 %) | Every drive | Every filesystem | Every volume |
+| Drive failing, RAID degraded or rebuilding | Drive health | RAID (mdadm) | RAID, drive health (SMART) |
+| Defender off, threat found | Yes | | |
+| CPU or memory flat out for 15 minutes | Yes | Yes | Yes |
+| Failed system services | | Yes | |
+
+A problem that's going on (a full disk) raises one alert, and "back to normal" when it's gone; a
+thing that happened (a pulled plug) raises one alert. Each device's page has a **Health** card with
+what's wrong now, its disks, CPU and memory.
+
+**With Uplink:** every alert lands on Uplink's **Alerts** page, one per problem per device, closed
+by itself when "back to normal" arrives. **Critical** ones also make a ticket, like a device
+shutting down without warning, a crash, a failing drive, a degraded RAID or a disk 97 % full. An open
+alert that gets worse and becomes critical makes its ticket then. Nothing to change in Uplink: its
+Backup alerts integration already receives these.
+
 ## Signing in, two-factor login and lockdown
 
 The web UI is protected in layers:

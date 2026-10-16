@@ -17,6 +17,7 @@ import FolderTree from "../components/FolderTree.jsx";
 import DeviceSettings from "../components/DeviceSettings.jsx";
 import FolderLock from "../components/FolderLock.jsx";
 import DeviceCopies from "../components/DeviceCopies.jsx";
+import DeviceHealth from "../components/DeviceHealth.jsx";
 import { DeviceAgent } from "../components/AgentUpdates.jsx";
 import DeviceService from "../components/DeviceService.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
@@ -336,6 +337,8 @@ export default function DeviceFolders() {
           needs it connected, so you can see its folders.
         </p>
       )}
+
+      <DeviceHealth health={data.health} />
 
       {multiFolder && (
         <FolderLock deviceId={device.id} lock={lock} live={device.live} folderCount={active.length} onChanged={reload} />

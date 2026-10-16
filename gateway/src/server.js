@@ -219,7 +219,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null, deviceHealth = null }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -281,6 +281,8 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
     const reportedVersion = typeof info.agentVersion === "string" ? info.agentVersion.slice(0, 20) : null;
     updates?.report(device, device.agent_version, reportedVersion, agentStatus);
     removals?.report(device, agentStatus);
+    // Device health (device-health.js): shutdowns, updates, disks... The reply says which events arrived.
+    const healthAck = info.health && deviceHealth ? deviceHealth.report(device, info.health) : null;
     log.debug(`Heartbeat from ${device.device_name} (${device.client_name})`);
 
     // Hand over any waiting jobs. Each one is encrypted for this device, so nobody in
@@ -315,6 +317,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
     return send(res, 200, {
       ok: true, serverTime: Date.now(), commands, browse, foldersVersion: device.folders_version ?? 0,
       ...(update ? { update } : {}), ...(uninstall ? { uninstall } : {}), ...(addresses ? { addresses } : {}),
+      ...(Number.isInteger(healthAck) ? { healthAck } : {}),
     });
   }
 
