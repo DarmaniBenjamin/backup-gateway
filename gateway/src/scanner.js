@@ -109,10 +109,19 @@ export function createScanner(setting = process.env.GATEWAY_CLAMAV) {
     for (const a of order) {
       try {
         const reply = await command(a, "VERSION");
-        if (!/^ClamAV/i.test(reply)) throw new Error(`unexpected reply: ${reply.slice(0, 80)}`);
+        let version = null;
+        if (/^ClamAV/i.test(reply)) version = parseVersion(reply);
+        else if (/COMMAND UNAVAILABLE/i.test(reply)) {
+          // VERSION switched off in clamd.conf (EnableVersionCommand no): PING can't be, and says it's alive.
+          // Scanning works the same; only the signature version isn't known (so no rescan on new ones).
+          const pong = await command(a, "PING");
+          if (!/^PONG/i.test(pong)) throw new Error(`unexpected reply: ${pong.slice(0, 80)}`);
+          if (!state.versionHidden) log.info("Antivirus: ClamAV's VERSION command is turned off (EnableVersionCommand no); checking it with PING instead");
+          state.versionHidden = true;
+        } else throw new Error(`unexpected reply: ${reply.slice(0, 80)}`);
         if (address !== a) log.info(`Antivirus: ClamAV found at ${describe(a)}`);
         address = a;
-        Object.assign(state, { available: true, everSeen: true, version: parseVersion(reply), error: null });
+        Object.assign(state, { available: true, everSeen: true, version, error: null });
         state.checkedAt = new Date().toISOString();
         return status();
       } catch (err) {
@@ -202,6 +211,8 @@ export function createScanner(setting = process.env.GATEWAY_CLAMAV) {
       signatures: state.version?.signatures ?? null,
       signaturesDate: state.version?.signaturesDate ?? null,
       checkedAt: state.checkedAt,
+      // VERSION turned off in clamd.conf: scanning works, the signature version just isn't shown
+      versionHidden: !!state.versionHidden,
       error: off ? null : state.error,
     };
   }
