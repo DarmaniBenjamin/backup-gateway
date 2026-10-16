@@ -193,7 +193,7 @@ function Result({ result, onClose }) {
             <>
               <h3 className="mt-5 font-display text-sm font-semibold text-fg">Short link for the new device</h3>
               <p className="mt-1 text-sm text-dim">
-                Type it into a browser on the new device: it shows {install.platform === "windows" ? "the setup program and " : ""}the command to
+                Type it into a browser on the new device: it shows the command to
                 paste, for this device only.
               </p>
               <div className="mt-2">
@@ -201,28 +201,9 @@ function Result({ result, onClose }) {
               </div>
             </>
           )}
-          {install.setupUrl && !install.localOnly && (
-            <>
-              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Easiest on Windows: the setup program</h3>
-              <p className="mt-1 text-sm text-dim">
-                Download it here and copy it to the new PC, or get it from the short link on that PC. Double-click it and allow it to make
-                changes. Keep its name as it is: the name tells it which install this is.
-              </p>
-              <a href={install.setupUrl} className={`${primaryButton} mt-3 w-full sm:w-auto`} download={install.setupName}>
-                <Download size={16} aria-hidden="true" />
-                Download the setup program
-              </a>
-              <p className="mt-2 break-all font-mono text-xs text-dim">{install.setupName}</p>
-              <p className="mt-2 text-xs text-dim">
-                Until the program is code-signed, Windows may say it &ldquo;protected your PC&rdquo;: click More info, then Run anyway.
-              </p>
-            </>
-          )}
           <h3 className="mt-5 font-display text-sm font-semibold text-fg">
             {install.platform === "windows"
-              ? install.setupUrl && !install.localOnly
-                ? "Or paste one command"
-                : "Paste one command on the new PC"
+              ? "Paste one command on the new PC (recommended)"
               : install.platform === "synology"
                 ? "Paste this in an SSH session on the NAS"
                 : "Paste this in a terminal on the new device"}
@@ -237,6 +218,24 @@ function Result({ result, onClose }) {
             {HOW_TO[install.platform] ?? HOW_TO.linux}{" "}
             The device shows up here within a minute.
           </p>
+          {install.setupUrl && !install.localOnly && (
+            <>
+              <h3 className="mt-5 font-display text-sm font-semibold text-fg">Or: the setup program</h3>
+              <p className="mt-1 text-sm text-dim">
+                Download it here and copy it to the new PC, or get it from the short link on that PC. Double-click it and allow it to make
+                changes. Keep its name as it is: the name tells it which install this is.
+              </p>
+              <a href={install.setupUrl} className={`${primaryButton} mt-3 w-full sm:w-auto`} download={install.setupName}>
+                <Download size={16} aria-hidden="true" />
+                Download the setup program
+              </a>
+              <p className="mt-2 break-all font-mono text-xs text-dim">{install.setupName}</p>
+              <p className="mt-2 text-xs text-dim">
+                It isn&rsquo;t code-signed, so Windows may say it &ldquo;protected your PC&rdquo;: click More info, then Run anyway. The command
+                above avoids that, so it&rsquo;s the better choice when you can paste.
+              </p>
+            </>
+          )}
           <details className="mt-5 text-sm">
             <summary className="cursor-pointer text-dim hover:text-fg">Set it up by hand instead</summary>
             <p className="mt-2 text-dim">Put this line in the agent&rsquo;s .env file, then start the agent:</p>

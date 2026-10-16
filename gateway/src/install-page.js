@@ -52,22 +52,22 @@ export function installPage(link) {
     body = `
 <h1>${link.upgrade ? "Turn on automatic updates" : "Install the backup agent"}</h1>
 ${forWho}
+<div class="card">
+<h2>Paste one command <span class="note">(recommended)</span></h2>
+<p>In <strong>PowerShell opened as Administrator</strong> (right-click the Start button &gt; Terminal (Admin)):</p>
+<pre>${esc(ps)}</pre>
+</div>
 ${
   link.setupName
     ? `<div class="card">
-<h2>The setup program</h2>
+<h2>Or the setup program</h2>
 <p>Download it, open it, and choose <strong>Yes</strong> when Windows asks to allow changes.</p>
 <a class="button" href="/i/${esc(link.short)}/setup.exe" download="${esc(link.setupName)}">Download the setup program</a>
 <p class="note">Keep its name as it is: <span class="file">${esc(link.setupName)}</span>. It tells the program which install this is.</p>
-<p class="note">If Windows says it protected your PC, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+<p class="note">It isn't code-signed, so Windows may say it protected your PC: choose <strong>More info</strong>, then <strong>Run anyway</strong>. The command above avoids that.</p>
 </div>`
     : ""
-}
-<div class="card">
-<h2>${link.setupName ? "Or paste one command" : "Paste one command"}</h2>
-<p>In <strong>PowerShell opened as Administrator</strong> (right-click the Start button &gt; Terminal (Admin)):</p>
-<pre>${esc(ps)}</pre>
-</div>`;
+}`;
   } else {
     const cmd = `curl -fsSL ${link.url}/sh | sudo bash`;
     body = `

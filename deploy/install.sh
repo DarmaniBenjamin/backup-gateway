@@ -150,6 +150,32 @@ else
   fi
 fi
 
+# ClamAV's VERSION command on: the gateway uses it to notice new signatures and rescan recent files
+if [[ -f /etc/clamav/clamd.conf ]] && grep -qE '^[[:space:]]*EnableVersionCommand[[:space:]]+(no|false)' /etc/clamav/clamd.conf; then
+  sed -i -E 's/^[[:space:]]*EnableVersionCommand.*/EnableVersionCommand yes/' /etc/clamav/clamd.conf
+  systemctl restart clamav-daemon >/dev/null 2>&1 || true
+  ok "ClamAV's VERSION command turned on (so new signatures trigger a rescan)"
+fi
+
+# A swap file on smaller servers: a memory spike (ClamAV reloading its signatures needs about twice
+# its usual memory for a moment) then slows things down instead of the system stopping ClamAV
+MEM_MB=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)
+SWAP_MB=$(awk '/SwapTotal/ {print int($2 / 1024)}' /proc/meminfo)
+if (( MEM_MB < 6000 && SWAP_MB < 1000 )) && [[ ! -e /swapfile ]] && [[ "$(stat -f -c %T / 2>/dev/null)" != btrfs ]]; then
+  if fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; then
+    chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile &&
+      { grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab; } &&
+      ok "Added 2 GB of swap (this server has ${MEM_MB} MB of memory)"
+  fi
+fi
+
+# Security updates for the operating system install by themselves (Ubuntu/Debian)
+if [[ $PKG == apt ]]; then
+  if ! dpkg -s unattended-upgrades >/dev/null 2>&1; then apt-get install -y -qq unattended-upgrades >/dev/null; fi
+  printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
+  ok "Security updates install by themselves (unattended-upgrades)"
+fi
+
 # The gateway's user may use ClamAV's socket (some setups only allow the clamav group)
 if getent group clamav >/dev/null && ! id -nG "$APP_USER" 2>/dev/null | tr ' ' '\n' | grep -qx clamav; then
   usermod -aG clamav "$APP_USER" && ok "The gateway's user ($APP_USER) can use ClamAV"
@@ -355,16 +381,34 @@ fi
 
 cat >/usr/local/bin/update-gateway <<EOF
 #!/usr/bin/env bash
-# Gets the newest gateway from GitHub and restarts it (made by deploy/install.sh)
+# Gets the newest gateway from GitHub, rebuilds the web UI and restarts it (made by deploy/install.sh).
+# Settings, backups, devices and accounts are kept: nothing is reinstalled.
 set -euo pipefail
 if [[ \$(id -un) != "$APP_USER" ]]; then exec sudo -u "$APP_USER" -H "\$0" "\$@"; fi
 cd "$REPO"
-git pull --ff-only
+BEFORE=\$(git rev-parse --short HEAD)
+echo "Getting the newest version..."
+git pull --ff-only --quiet
+AFTER=\$(git rev-parse --short HEAD)
+if [[ \$BEFORE == "\$AFTER" ]]; then
+  echo "  Already the newest version (\$AFTER). Rebuilding and restarting anyway."
+else
+  echo "  \$BEFORE -> \$AFTER:"
+  git log --oneline "\$BEFORE..\$AFTER" | sed 's/^/    /'
+fi
+echo "Building the web UI..."
 cd gateway/ui
-npm ci --no-audit --no-fund --loglevel=error
-npm run build
+npm ci --no-audit --no-fund --loglevel=error >/dev/null
+npm run build >/dev/null
+echo "Restarting the gateway..."
 sudo systemctl restart $SERVICE
-echo "Updated and restarted. Logs: journalctl -u $SERVICE -f"
+for _ in \$(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8090/ 2>/dev/null && break; sleep 1; done
+if curl -fsS -o /dev/null http://127.0.0.1:8090/ 2>/dev/null; then
+  echo "Updated and running (\$AFTER). Devices update their agent by themselves."
+else
+  echo "The gateway didn't come back up. See why: journalctl -u $SERVICE -n 50 --no-pager" >&2
+  exit 1
+fi
 EOF
 chmod 755 /usr/local/bin/update-gateway
 ok "update-gateway: gets the newest version and restarts"

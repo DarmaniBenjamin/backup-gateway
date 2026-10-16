@@ -28,10 +28,13 @@ command to paste in a terminal there, for example:
 It downloads the agent from the gateway, checks its SHA-256, installs it as a background service and
 connects — no code or settings to type. The link works once and expires with its enrollment code
 (after 20 wrong links in 10 minutes, an address has to wait, so the 6-letter codes can't be guessed).
-For devices on other computers, set `GATEWAY_HOST=0.0.0.0` and `GATEWAY_PUBLIC_URL` in the gateway's `.env`.
+Nothing has to be set for the address: install links use the gateway's own IP addresses (found by
+themselves) and, once the **Domain & SSL** page has a domain that works, that domain over https.
+Add device lets you pick the address the device is on, and each device gets the one it used.
 
-**Windows PCs and servers** get three choices: the setup program, or one command for PowerShell or
-Command Prompt run as Administrator. All three do the same:
+**Windows PCs and servers:** paste one command in PowerShell (or Command Prompt) run as
+Administrator. That's the recommended way: it avoids the warnings Windows shows for programs that
+aren't code-signed. The setup program does the same, for when pasting isn't practical. Either way:
 the agent goes to `C:\Program Files\BackupAgent`, its settings and keys to `C:\ProgramData\BackupAgent`
 (SYSTEM and Administrators only), and it runs as a background task that starts with Windows. To remove
 it: `powershell -ExecutionPolicy Bypass -File "C:\Program Files\BackupAgent\uninstall.ps1"` (add
@@ -52,13 +55,14 @@ for in malware.
 Rebuild it after changing those files with `npm run build-windows-setup` (needs Zig:
 `sudo pacman -S zig`), then restart the gateway.
 
-Until it's code-signed, Windows SmartScreen says it "protected your PC" (More info > Run anyway), and
-some antivirus programs are wary of any new unsigned program. Signing it removes that: get a code
-signing certificate (for example Azure Trusted Signing, or a certificate from Certum, Sectigo or
-DigiCert), sign `gateway/setup-exe/BackupAgentSetup.exe`, keep the signed file there and restart the
-gateway. Every device then gets that signed file, since it's the same for everyone. If one antivirus
-still flags it, send the file to that vendor as a false positive (Microsoft:
-https://www.microsoft.com/wdsi/filesubmission).
+It isn't code-signed, so Windows SmartScreen may say it "protected your PC" (More info > Run anyway),
+and some antivirus programs are wary of any new unsigned program. The PowerShell command avoids both.
+To sign it later: Microsoft's Artifact Signing (about $10 a month) only serves businesses in a few
+countries and individuals in the US and Canada; elsewhere, an OV certificate with cloud signing works,
+for example SSL.com's eSigner, which can sign from Linux with the free `jsign` tool. Sign
+`gateway/setup-exe/BackupAgentSetup.exe`, keep the signed file there and restart the gateway: every
+device then gets the signed file. If one antivirus still flags it, send the file to that vendor as a
+false positive (Microsoft: https://www.microsoft.com/wdsi/filesubmission).
 
 On Linux the agent runs as a service (`backup-agent`) under its own user, not root. It can read any
 file so it can back it up, but can only write inside the allowed folders (for restores), and the rest
@@ -107,8 +111,10 @@ else (another app), the gateway leaves it alone: use the tunnel there.
 Every clean backup can also go to the cloud. Everything sent is already encrypted, and quarantined
 files are never sent. There are two kinds of copy:
 
-- **Failsafe** (on the **Off-site** page): one location that gets everything, from every device.
-  **Back up everything now** sends whatever it doesn't have yet straight away.
+- **Failsafes** (on the **Off-site** page): places that each get everything, from every device. Add
+  as many as you like (**Add another failsafe copy**), for example a Backblaze bucket, a second S3
+  provider and a Google Drive, so one provider having a problem never leaves you without a copy.
+  **Back up everything now** sends whatever a copy doesn't have yet straight away.
 - **A device's own copies** (on each device's page, under **Off-site copies**): its own Backblaze
   bucket with its own application key, and/or its own Google Drive. Each backup folder on the device
   page picks which of the device's copies it goes to (all of them by default).
@@ -116,7 +122,8 @@ files are never sent. There are two kinds of copy:
 A bucket must have **Object Lock** turned on (Backblaze B2, Wasabi, Amazon S3 or any S3-compatible
 storage). Backups are locked there for the number of days you choose, so nobody can delete or change
 them before then: not ransomware, not someone with the gateway's key. Google Drive can't lock files,
-so use a locked bucket as the failsafe.
+so make your first failsafe a locked bucket. Object Lock costs nothing extra at Backblaze: deleted
+data is only kept (and billed) until its lock runs out, which you choose when connecting the bucket.
 
 ### Google Drive
 
@@ -220,6 +227,44 @@ permissions, network, services) once a day with Synology's own tool into
 adds that folder, so every day's export is kept as a version. To put settings back: DSM, Control
 Panel > Update & Restore > Configuration Backup > Restore, with the restored .dss file.
 
-## Status
+## Signing in, two-factor login and lockdown
 
-Early development — running locally.
+The web UI is protected in layers:
+
+- **Setup link.** Before the gateway has its domain, the web UI by IP address only opens with the
+  private link the installer prints. Lost it? `cd gateway && sudo npm run setup-link`.
+- **The domain, over https.** Once Domain & SSL says Done, the web UI is only at `https://<domain>`
+  (with HSTS), and opening it by IP shows a page pointing there.
+- **Two-factor login** (Account, in the menu under your name): a code from an authenticator app
+  after the password, each code usable once, and 10 one-time recovery codes for a lost phone. A
+  banner reminds you until it's on. Lost the phone and the codes? On the server:
+  `sudo npm run reset-2fa -- USERNAME`.
+- **Wrong passwords** slow down, then block, the address getting them wrong, never your own logins
+  from elsewhere. Many wrong passwords from several places is treated as an attack.
+- **Lockdown** turns on by itself during a login attack, or with the button on the Security page:
+  nothing can be changed or deleted (backups, restores and checks keep working) until it's lifted
+  with the recovery key. Without a recovery key: `sudo npm run lockdown -- off` on the server.
+
+## Updating
+
+On the gateway server, one command gets the newest version from GitHub, rebuilds the web UI and
+restarts, keeping every setting, backup, device and account:
+
+```bash
+update-gateway
+```
+
+It shows what changed and checks the gateway came back up. Devices update their agent by themselves.
+`sudo bash deploy/install.sh` is only needed for a new server (it's safe to run again: it keeps the
+existing settings, backups and accounts). Run the tests any time with `cd gateway && npm test`.
+
+## Before real clients
+
+- [ ] Domain & SSL says Done, and `http://<IP>` shows the blocked page
+- [ ] Two-factor login is on, and the recovery codes are saved away from your phone
+- [ ] At least one failsafe copy, on a bucket with Object Lock; the recovery key kept offline
+- [ ] Alerts reach your phone (Alerts page, ntfy): send a test
+- [ ] The Security page shows ClamAV running
+- [ ] One restore tried from the web UI, and once, a full rebuild with `npm run recover` on a
+      spare server
+- [ ] Your runbook filled in (`docs/RUNBOOK.md`) and kept somewhere you can reach without the gateway
