@@ -130,5 +130,7 @@ test("adding remote access to an existing device: one line, https only, the righ
   const win = addRemoteCommand("win32", r);
   assert.match(win, /meshagents\?id=4&meshid=ab%24c%40d&installflags=0/);
   assert.match(win, /-fullinstall/);
+  assert.match(win, /Tls12/, "TLS 1.2 on, for Windows PowerShell 5.1 on older Windows");
+  assert.match(win, /\$ErrorActionPreference = 'Stop'/, "a failed download stops it, nothing half-done is run");
   assert.equal(addRemoteCommand("linux", null), null, "nothing when remote access isn't on");
 });

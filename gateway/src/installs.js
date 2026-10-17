@@ -228,7 +228,9 @@ export function addRemoteCommand(platform, remote) {
   if (!remote) return null;
   if (platform === "win32") {
     const exe = `${remote.url}/meshagents?id=4&meshid=${encodeURIComponent(remote.meshId)}&installflags=0`;
-    return `$f = Join-Path $env:TEMP 'meshagent.exe'; Invoke-WebRequest -UseBasicParsing -Uri ${q(exe)} -OutFile $f; & $f -fullinstall; Remove-Item $f -ErrorAction SilentlyContinue`;
+    // TLS 1.2 on (Windows PowerShell 5.1 on older Windows doesn't always have it), no progress bar
+    // (it makes downloads crawl there), and stop at the first error so a failed download isn't run
+    return `$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $f = Join-Path $env:TEMP 'meshagent.exe'; Invoke-WebRequest -UseBasicParsing -Uri ${q(exe)} -OutFile $f; & $f -fullinstall; Remove-Item $f -ErrorAction SilentlyContinue`;
   }
   const msh = `${remote.url}/meshsettings?id=${encodeURIComponent(remote.meshId)}`;
   return `d=$(mktemp -d) && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o "$d/meshagent" && curl -fsS --proto =https ${q(msh)} -o "$d/meshagent.msh" && chmod 755 "$d/meshagent" && sudo "$d/meshagent" -fullinstall; rm -rf "$d"`;
