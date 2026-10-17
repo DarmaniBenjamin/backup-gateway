@@ -174,7 +174,8 @@ export function createRemote({ dataDir, address, security = null, meshDir = proc
 
   function startChild(domain) {
     ready = false;
-    const p = spawn(node, [path.join(meshDir, "meshcentral.js"), "--datapath", home], { cwd: meshDir, stdio: ["ignore", "pipe", "pipe"] });
+    // --debug agent: MeshCentral says what happens to each agent; only those outcomes are logged (below)
+    const p = spawn(node, [path.join(meshDir, "meshcentral.js"), "--datapath", home, "--debug", "agent"], { cwd: meshDir, stdio: ["ignore", "pipe", "pipe"] });
     child = p;
     runningFor = domain;
     const onLine = (buf) => {
@@ -189,6 +190,12 @@ export function createRemote({ dataDir, address, security = null, meshDir = proc
           // (renewed since, or another one served): read the current one again, and let it in
           log.warn(`Remote access: ${line.slice(0, 300)}`);
           reloadCert();
+        } else if (/^AGENT: (New agent at|Verified agent connection)/.test(line)) {
+          log.info(`Remote access: ${line.replace(/^AGENT: /, "agent: ").slice(0, 300)}`);
+        } else if (/^AGENT: .*(bad signature|invalid domain|invalid mesh|WSERR|Duplicate agent|in big trouble)/.test(line)) {
+          log.warn(`Remote access: ${line.replace(/^AGENT: /, "agent refused: ").slice(0, 300)}`);
+        } else if (/^AGENT: /.test(line)) {
+          // the rest of the agent chatter stays out of the log
         } else if (/error|failed|bad signature|holding connection/i.test(line)) log.warn(`Remote access: ${line.slice(0, 300)}`);
       }
     };
