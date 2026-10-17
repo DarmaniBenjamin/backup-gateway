@@ -125,7 +125,8 @@ test("adding remote access to an existing device: one line, https only, the righ
   const linux = addRemoteCommand("linux", r);
   assert.match(linux, /--proto =https/);
   assert.match(linux, /meshsettings\?id=ab%24c%40d/, "the group's id, escaped for the address");
-  assert.match(linux, /sudo "\$d\/meshagent" -fullinstall/);
+  assert.match(linux, /cd "\$d" && /, "runs from the folder with its settings");
+  assert.match(linux, /sudo \.\/meshagent -fullinstall --copy-msh=1/, "and keeps them: without, it never connects");
   execFileSync("bash", ["-n", "-c", linux]); // throws if it isn't valid bash
   const win = addRemoteCommand("win32", r);
   assert.match(win, /meshagents\?id=4&meshid=ab%24c%40d&installflags=0/);

@@ -212,7 +212,7 @@ function linuxRemoteStep(remote) {
       cd "$tmp/remote" &&
       curl -fsS --proto =https ${q(base)}"/meshagents?id=$ma" -o meshagent &&
       curl -fsS --proto =https ${q(msh)} -o meshagent.msh &&
-      chmod 755 meshagent && ./meshagent -fullinstall >/dev/null 2>&1
+      chmod 755 meshagent && ./meshagent -fullinstall --copy-msh=1 >/dev/null 2>&1
     ); then
     echo "Remote access is on."
   else
@@ -233,7 +233,9 @@ export function addRemoteCommand(platform, remote) {
     return `$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $f = Join-Path $env:TEMP 'meshagent.exe'; Invoke-WebRequest -UseBasicParsing -Uri ${q(exe)} -OutFile $f; & $f -fullinstall; Remove-Item $f -ErrorAction SilentlyContinue`;
   }
   const msh = `${remote.url}/meshsettings?id=${encodeURIComponent(remote.meshId)}`;
-  return `d=$(mktemp -d) && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o "$d/meshagent" && curl -fsS --proto =https ${q(msh)} -o "$d/meshagent.msh" && chmod 755 "$d/meshagent" && sudo "$d/meshagent" -fullinstall; rm -rf "$d"`;
+  // Run from the folder with its settings (meshagent.msh), and --copy-msh=1 so the installed agent keeps
+  // them, as MeshCentral's own installer does: without them it installs but never connects
+  return `d=$(mktemp -d) && cd "$d" && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o meshagent && curl -fsS --proto =https ${q(msh)} -o meshagent.msh && chmod 755 meshagent && sudo ./meshagent -fullinstall --copy-msh=1; cd ~; rm -rf "$d"`;
 }
 
 function windowsRemoteStep(remote) {
