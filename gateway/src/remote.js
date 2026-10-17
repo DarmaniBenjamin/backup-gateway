@@ -184,7 +184,12 @@ export function createRemote({ dataDir, address, security = null, meshDir = proc
           error = null;
           restarts = 0;
           log.info(`Remote access: running at https://${domain}${REMOTE_PATH}/`);
-        } else if (/error|failed/i.test(line)) log.warn(`Remote access: ${line.slice(0, 300)}`);
+        } else if (/bad web cert/i.test(line)) {
+          // An agent saw a different https certificate from the one MeshCentral read when it started
+          // (renewed since, or another one served): read the current one again, and let it in
+          log.warn(`Remote access: ${line.slice(0, 300)}`);
+          reloadCert();
+        } else if (/error|failed|bad signature|holding connection/i.test(line)) log.warn(`Remote access: ${line.slice(0, 300)}`);
       }
     };
     p.stdout.on("data", onLine);
@@ -200,6 +205,16 @@ export function createRemote({ dataDir, address, security = null, meshDir = proc
       log.warn(`Remote access: ${error}; starting it again`);
       setTimeout(() => sync().catch(() => {}), Math.min(5 * 60_000, 5000 * restarts)).unref();
     });
+  }
+
+  // MeshCentral reads the site's certificate when it starts: restart it to read it again, at most
+  // once every 10 minutes (an agent that keeps seeing another one can't make it restart in a loop)
+  let lastReload = 0;
+  function reloadCert() {
+    if (Date.now() - lastReload < 10 * 60_000 || !child) return;
+    lastReload = Date.now();
+    log.info("Remote access: an agent saw a different certificate; restarting MeshCentral to read the current one");
+    stopChild().then(() => sync()).catch(() => {});
   }
 
   // Stops it, and waits until it's gone (its port must be free before another one starts)
