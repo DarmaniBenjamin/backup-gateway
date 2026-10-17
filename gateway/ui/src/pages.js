@@ -13,6 +13,7 @@ export const pages = {
   Alerts: () => import("./pages/Alerts.jsx"),
   Certificate: () => import("./pages/Certificate.jsx"),
   Account: () => import("./pages/Account.jsx"),
+  RemoteAccess: () => import("./pages/RemoteAccess.jsx"),
 };
 
 // Fetch them all quietly once the browser is idle

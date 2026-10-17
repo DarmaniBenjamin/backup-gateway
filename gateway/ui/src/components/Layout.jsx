@@ -15,10 +15,11 @@ import { preloadPages } from "../pages.js";
 const NAV = [
   { to: "/", label: "Overview", end: true },
   { to: "/devices", label: "Devices" },
+  { to: "/remote-access", label: "Remote access" },
   { to: "/restore", label: "Restore" },
   { to: "/security", label: "Security" },
   { to: "/alerts", label: "Alerts" },
-  { to: "/quarantine", label: "Quarantine" },
+  { to: "/quarantine", label: "Quarantine", more: true },
   { to: "/offsite", label: "Off-site" },
   { to: "/domain", label: "Domain & SSL" },
   // Used less often: under More in the top bar (all listed in the phone menu)

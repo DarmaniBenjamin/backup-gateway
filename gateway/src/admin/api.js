@@ -40,6 +40,7 @@
 //   Security page: security-api.js. Agent updates: updates-api.js. Alerts page: notify-api.js.
 //   Pause, uninstall or remove a device: service-api.js.
 
+import fs from "node:fs";
 import { createEnrollmentCode } from "../codes.js";
 import { normalizePath, prepareRestore, RestoreError } from "../restore-plan.js";
 import { runVerify } from "../verify.js";
@@ -76,6 +77,31 @@ export class ApiError extends Error {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The repo's current commit, from .git (no git command needed), read once
+let commitSeen;
+function gatewayCommit() {
+  if (commitSeen !== undefined) return commitSeen;
+  commitSeen = null;
+  try {
+    const gitDir = new URL("../../../.git/", import.meta.url);
+    const head = fs.readFileSync(new URL("HEAD", gitDir), "utf8").trim();
+    const ref = head.startsWith("ref: ") ? head.slice(5) : null;
+    let sha = ref ? null : head;
+    if (ref) {
+      try {
+        sha = fs.readFileSync(new URL(ref, gitDir), "utf8").trim();
+      } catch {
+        const packed = fs.readFileSync(new URL("packed-refs", gitDir), "utf8");
+        sha = packed.split("\n").find((l) => l.endsWith(` ${ref}`))?.split(" ")[0] ?? null;
+      }
+    }
+    if (/^[0-9a-f]{40}$/.test(sha ?? "")) commitSeen = sha.slice(0, 7);
+  } catch {
+    // not a git checkout
+  }
+  return commitSeen;
+}
 
 function deviceStatus(device) {
   if (device.status !== "active") return device.status;
@@ -273,6 +299,11 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       store.audit(admin.username, "2fa.off", null, ip);
       security?.event("high", "admin.2fa", `${admin.username} turned off two-factor login`, { detail: { username: admin.username, ip } });
       return { ok: true };
+    },
+
+    // Which version of the gateway is running (the repo's commit) and the agent it hands out
+    "GET /version"() {
+      return { commit: gatewayCommit(), agent: updates?.version ?? null };
     },
 
     // ----- Remote access (remote.js): status, and a person's own remote-access password -----

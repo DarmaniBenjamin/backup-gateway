@@ -185,7 +185,7 @@ function WithCode({ path, label, icon: Icon, danger = false, onDone }) {
 
 // Your own remote-access account (gateway/src/remote.js): the same name as here, its own password.
 // Remote access only opens after the gateway's own sign-in (with its two-factor), then asks for this.
-function RemoteAccess({ twoFactor }) {
+export function RemoteAccess({ twoFactor }) {
   const [status, setStatus] = useState(null);
   const [form, setForm] = useState({ password: "", code: "", remotePassword: "", again: "" });
   const [busy, setBusy] = useState(false);

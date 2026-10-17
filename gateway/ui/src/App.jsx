@@ -20,6 +20,7 @@ const Security = lazy(pages.Security);
 const Alerts = lazy(pages.Alerts);
 const Certificate = lazy(pages.Certificate);
 const Account = lazy(pages.Account);
+const RemoteAccess = lazy(pages.RemoteAccess);
 
 function RequireLogin({ children }) {
   const { user, checking } = useAuth();
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="alerts" element={<Alerts />} />
         <Route path="domain" element={<Certificate />} />
         <Route path="account" element={<Account />} />
+        <Route path="remote-access" element={<RemoteAccess />} />
         <Route path="certificate" element={<Navigate to="/domain" replace />} />
         <Route path="quarantine" element={<Quarantine />} />
         <Route path="jobs" element={<Jobs />} />
