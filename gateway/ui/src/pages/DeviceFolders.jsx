@@ -339,7 +339,7 @@ export default function DeviceFolders() {
         </p>
       )}
 
-      <DeviceRemote remote={data.remote} platform={data.platform} />
+      <DeviceRemote remote={data.remote} />
 
       <DeviceHealth health={data.health} />
 

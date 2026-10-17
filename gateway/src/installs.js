@@ -221,6 +221,19 @@ function linuxRemoteStep(remote) {
 `;
 }
 
+// For a device installed before remote access: one line that adds only MeshCentral's agent, into
+// its client's group (the backup agent isn't touched). Pasted with sudo (Linux) or in an
+// Administrator PowerShell (Windows). Over https only.
+export function addRemoteCommand(platform, remote) {
+  if (!remote) return null;
+  if (platform === "win32") {
+    const exe = `${remote.url}/meshagents?id=4&meshid=${encodeURIComponent(remote.meshId)}&installflags=0`;
+    return `$f = Join-Path $env:TEMP 'meshagent.exe'; Invoke-WebRequest -UseBasicParsing -Uri ${q(exe)} -OutFile $f; & $f -fullinstall; Remove-Item $f -ErrorAction SilentlyContinue`;
+  }
+  const msh = `${remote.url}/meshsettings?id=${encodeURIComponent(remote.meshId)}`;
+  return `d=$(mktemp -d) && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o "$d/meshagent" && curl -fsS --proto =https ${q(msh)} -o "$d/meshagent.msh" && chmod 755 "$d/meshagent" && sudo "$d/meshagent" -fullinstall; rm -rf "$d"`;
+}
+
 function windowsRemoteStep(remote) {
   if (!remote) return "";
   const exe = `${remote.url}/meshagents?id=4&meshid=${encodeURIComponent(remote.meshId)}&installflags=0`;

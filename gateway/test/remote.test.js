@@ -113,3 +113,18 @@ test("lockdown: no remote sessions, but devices stay connected", async (t) => {
   assert.equal(await upgrade(g, "/remote/meshrelay.ashx?id=x", withSession), "refused", "no desktop sessions");
   assert.equal(await upgrade(g, "/remote/agent.ashx"), "upgraded");
 });
+
+test("adding remote access to an existing device: one line, https only, the right client's group", async () => {
+  const { addRemoteCommand } = await import("../src/installs.js");
+  const { execFileSync } = await import("node:child_process");
+  const r = { url: "https://backup.acme.io/remote", meshId: "ab$c@d" };
+  const linux = addRemoteCommand("linux", r);
+  assert.match(linux, /--proto =https/);
+  assert.match(linux, /meshsettings\?id=ab%24c%40d/, "the group's id, escaped for the address");
+  assert.match(linux, /sudo "\$d\/meshagent" -fullinstall/);
+  execFileSync("bash", ["-n", "-c", linux]); // throws if it isn't valid bash
+  const win = addRemoteCommand("win32", r);
+  assert.match(win, /meshagents\?id=4&meshid=ab%24c%40d&installflags=0/);
+  assert.match(win, /-fullinstall/);
+  assert.equal(addRemoteCommand("linux", null), null, "nothing when remote access isn't on");
+});

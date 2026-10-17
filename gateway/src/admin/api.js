@@ -48,7 +48,7 @@ import { createLoginGuard } from "./login-guard.js";
 import { ALLOWED_IN_LOCKDOWN } from "./lockdown.js";
 import { newSecret, verifyCode, otpauthUrl, newRecoveryCodes, hashRecoveryCode, looksLikeRecoveryCode } from "./totp.js";
 import { REASON_TEXT, describeContent, isText } from "../inspect.js";
-import { cleanInstallOptions } from "../installs.js";
+import { cleanInstallOptions, addRemoteCommand } from "../installs.js";
 import { chunkId as makeChunkId, open } from "../crypto-box.js";
 import {
   MAX_FOLDERS, cleanExcludes, folderNameFromPath, foldersOverlap, isInsidePath, isValidDevicePath, newFolderId, samePath,
@@ -628,6 +628,23 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     store.audit(admin.username, action, { device: device.device_name, ...details }, ip);
   }
 
+  // Remote access for a device's page: its links, or for a device installed before remote access,
+  // the one line that adds it. A Synology has no desktop to share.
+  async function remoteFor(d) {
+    const facts = deviceHealth?.view(d.id)?.facts;
+    const synology = /^Synology/i.test(facts?.os ?? "");
+    const status = remote.status();
+    if (synology) return { status, synology: true, links: null, add: null };
+    const links = await remote.links(d, facts?.hostname).catch(() => null);
+    let add = null;
+    if (!links && status.running) {
+      const info = await remote.installInfo(d.client_name).catch(() => null);
+      const command = addRemoteCommand(d.platform, info);
+      if (command) add = { platform: d.platform === "win32" ? "windows" : "linux", command };
+    }
+    return { status, synology: false, links, add };
+  }
+
   Object.assign(routes, {
     async "GET /devices/:id/folders"({ params }) {
       const d = getDeviceOr404(params.id);
@@ -645,7 +662,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         // Device health: what's wrong now, and its disks, CPU and memory (device-health.js)
         health: deviceHealth?.view(d.id) ?? null,
         // Remote desktop, terminal and files, opened in a new tab (remote.js); null if not available
-        remote: remote ? { links: await remote.links(d, deviceHealth?.view(d.id)?.facts?.hostname).catch(() => null), status: remote.status() } : null,
+        remote: remote ? await remoteFor(d) : null,
         // This device's own off-site copies, and whether the failsafe (everything) is set up
         offsite: {
           copies: copies.forDevice(d.id),

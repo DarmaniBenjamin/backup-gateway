@@ -265,7 +265,8 @@ into that computer, with nothing to install on yours. It's MeshCentral (open sou
   https. MeshCentral listens on this computer only, with no other port.
 - New Windows and Linux devices get its agent with the usual install command, in their client's
   group, and are matched to their gateway device by name. Synology NAS: no desktop to share, so no
-  remote agent. Devices installed before this don't have it yet: a way to add it to them comes next.
+  remote agent. A device installed before remote access shows a one-line command on its page that
+  adds only remote access (backups untouched), to paste once on that device.
 - **Two locks.** Remote access only opens for someone signed in to the gateway, so after its
   two-factor login; then it asks for your own remote-access password, set on the **Account** page
   (which needs your gateway password and two-factor code). Devices' own connections are exempt.

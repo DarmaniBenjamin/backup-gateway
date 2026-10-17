@@ -227,7 +227,15 @@ export function createHealth({ dataDir, deviceName = os.hostname() }) {
       const units = (failed ?? "").split("\n").map((l) => l.trim().split(/\s+/)[0]).filter((u) => u && u.endsWith(".service"));
       if (units.length) found.push({ id: "services-failed", severity: "medium", title: `${units.length === 1 ? "A system service has" : `${units.length} system services have`} stopped with an error: ${units.slice(0, 6).join(", ")}` });
     }
-    facts = { ...facts, disks: disks.map((d) => ({ name: d.name, total: d.total, free: d.free })), bootedAt: new Date(Date.now() - os.uptime() * 1000).toISOString() };
+    // On a Synology: its DSM version, so the gateway knows it's a NAS (no desktop to share)
+    const dsm = IS_SYNOLOGY ? readText("/etc.defaults/VERSION") : null;
+    const dsmVersion = dsm ? [dsm.match(/^productversion="?([^"\n]+)/m)?.[1], dsm.match(/^buildnumber="?([^"\n]+)/m)?.[1]].filter(Boolean).join("-") : null;
+    facts = {
+      ...facts,
+      ...(dsm ? { os: `Synology DSM ${dsmVersion || ""}`.trim() } : {}),
+      disks: disks.map((d) => ({ name: d.name, total: d.total, free: d.free })),
+      bootedAt: new Date(Date.now() - os.uptime() * 1000).toISOString(),
+    };
     return found;
   }
 
