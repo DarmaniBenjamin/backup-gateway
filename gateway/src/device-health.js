@@ -40,6 +40,8 @@ export function cleanHealth(raw) {
   const f = raw.facts && typeof raw.facts === "object" ? raw.facts : {};
   const facts = {
     os: text(f.os, 120) || null,
+    // The computer's own name (remote access matches its MeshCentral device by it)
+    hostname: text(f.hostname, 120) || null,
     cpu: num(f.cpu),
     mem: num(f.mem),
     bootedAt: iso(f.bootedAt),

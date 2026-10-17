@@ -84,7 +84,7 @@ function deviceStatus(device) {
   return Date.now() - new Date(device.last_seen_at) < ONLINE_WINDOW_MS ? "online" : "offline";
 }
 
-export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null, deviceHealth = null }) {
+export function createAdminApi({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown = null, deviceHealth = null, remote = null }) {
   // Wrong passwords: slowed down and blocked per address; an attack turns on lockdown (login-guard.js)
   const guard = createLoginGuard({
     onAttack(reason) {
@@ -273,6 +273,26 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
       store.audit(admin.username, "2fa.off", null, ip);
       security?.event("high", "admin.2fa", `${admin.username} turned off two-factor login`, { detail: { username: admin.username, ip } });
       return { ok: true };
+    },
+
+    // ----- Remote access (remote.js): status, and a person's own remote-access password -----
+    "GET /remote"() {
+      return remote ? remote.status() : { installed: false };
+    },
+    // Needs the gateway password and, with two-factor on, a code: a stolen session alone can't set it
+    async "POST /me/remote-password"({ admin, body, ip }) {
+      if (!remote) throw new ApiError(404, "Remote access isn't part of this gateway.");
+      const a = await checkPassword(admin, body.password);
+      if (a.totp_secret && !useCode(a, body.code)) throw new ApiError(400, "That two-factor code isn't right.");
+      const pass = String(body.remotePassword ?? "");
+      if (pass.length < 12) throw new ApiError(400, "Use at least 12 characters for the remote-access password.");
+      try {
+        const r = await remote.setPassword(admin.username, pass);
+        store.audit(admin.username, "remote.password", null, ip);
+        return r;
+      } catch (err) {
+        throw new ApiError(409, err.message);
+      }
     },
 
     // ----- Lockdown (lockdown.js) -----
@@ -609,7 +629,7 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
   }
 
   Object.assign(routes, {
-    "GET /devices/:id/folders"({ params }) {
+    async "GET /devices/:id/folders"({ params }) {
       const d = getDeviceOr404(params.id);
       return {
         device: {
@@ -624,6 +644,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
         agentStatus: agentStatusOf(d),
         // Device health: what's wrong now, and its disks, CPU and memory (device-health.js)
         health: deviceHealth?.view(d.id) ?? null,
+        // Remote desktop, terminal and files, opened in a new tab (remote.js); null if not available
+        remote: remote ? { links: await remote.links(d, deviceHealth?.view(d.id)?.facts?.hostname).catch(() => null), status: remote.status() } : null,
         // This device's own off-site copies, and whether the failsafe (everything) is set up
         offsite: {
           copies: copies.forDevice(d.id),

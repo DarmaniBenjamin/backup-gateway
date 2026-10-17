@@ -237,6 +237,10 @@ ok "gateway/.env saved (only $APP_USER can read it)"
 step "5/7 Web UI and the gateway service"
 as_app "$GW/ui" "npm ci --no-audit --no-fund --loglevel=error" >/dev/null
 as_app "$GW/ui" "npm run build" >/dev/null
+# Remote access (MeshCentral, run by the gateway: src/remote.js). About 500 MB; on once the domain works.
+# With its package-lock.json (in the repo), exactly the tested versions
+if [[ -f "$GW/remote/package-lock.json" ]]; then REMOTE_NPM="npm ci"; else REMOTE_NPM="npm install"; fi
+as_app "$GW/remote" "$REMOTE_NPM --omit=dev --no-audit --no-fund --loglevel=error" >/dev/null && ok "Remote access ready (turns on with the domain)"
 ok "Web UI built"
 
 # Something already on the gateway's ports (e.g. "npm start" left running in a terminal)?
@@ -400,6 +404,9 @@ echo "Building the web UI..."
 cd gateway/ui
 npm ci --no-audit --no-fund --loglevel=error >/dev/null
 npm run build >/dev/null
+echo "Updating remote access..."
+cd ../remote
+if [[ -f package-lock.json ]]; then npm ci --omit=dev --no-audit --no-fund --loglevel=error >/dev/null; else npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null; fi
 echo "Restarting the gateway..."
 sudo systemctl restart $SERVICE
 for _ in \$(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8090/ 2>/dev/null && break; sleep 1; done

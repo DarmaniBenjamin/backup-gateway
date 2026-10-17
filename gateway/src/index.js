@@ -23,6 +23,7 @@ import { createAddress } from "./address.js";
 import { openAdminStore } from "./admin/admin-store.js";
 import { createLockdown } from "./admin/lockdown.js";
 import { createDeviceHealth } from "./device-health.js";
+import { createRemote } from "./remote.js";
 import { loadOrCreateSetupKey } from "./setup-key.js";
 import { createAdminServer } from "./admin/admin-server.js";
 import { log } from "./logger.js";
@@ -69,7 +70,14 @@ const webUi = (req, res, ip) => adminServer.handle(req, res, ip);
 const setupKey = loadOrCreateSetupKey(config.dataDir);
 // Device health from the agents: shutdowns, updates, disks... turned into alerts (device-health.js)
 const deviceHealth = createDeviceHealth({ dataDir: config.dataDir, security });
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi, setupKey, deviceHealth });
+// Remote desktop, terminal and files (MeshCentral, run by the gateway): on once the domain works (remote.js)
+const remote = createRemote({ dataDir: config.dataDir, address, security });
+installs.useRemote?.(remote);
+// (lockdown is made below; this is only called later)
+const isLockedDown = () => lockdown.isOn();
+// Remote access for people needs a gateway session (so its two-factor login), see server.js
+const isSignedIn = (token) => !!store.findSession(token);
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi, setupKey, deviceHealth, remote, isLockedDown, isSignedIn });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
 // Alerts by phone push, email or webhook, and the checks for devices offline and disk space
@@ -77,12 +85,13 @@ const notify = createNotify({ db, dataDir: config.dataDir, security });
 const health = createHealth({ db, dataDir: config.dataDir, security, settings: notify.settings, skipDevice: removals.inProgress });
 // Lockdown: nothing can be changed or deleted until it's lifted with the recovery key (admin/lockdown.js)
 const lockdown = createLockdown({ store, security, copies });
-const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown, deviceHealth });
+const adminServer = createAdminServer({ db, store, keys, storage, config, broker, installs, copies, security, scanner, updates, notify, health, removals, address, lockdown, deviceHealth, remote });
 copies.start();
 notify.start();
 security.start({ pendingCleared: () => copies.syncNow() });
 health.start();
 address.start();
+remote.start();
 const removalTimer = setInterval(() => removals.tick(), 30_000);
 removalTimer.unref();
 // Removed devices deleted for good N days after they were removed, if that's on (Devices page)
@@ -123,6 +132,7 @@ function shutdown(signal) {
   security.stop();
   notify.stop();
   health.stop();
+  remote.stop(); // MeshCentral too
   clearInterval(removalTimer);
   adminServer.close();
   server.close(() => {

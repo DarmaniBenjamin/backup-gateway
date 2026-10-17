@@ -277,7 +277,7 @@ export function createHealth({ dataDir, deviceName = os.hostname() }) {
       found.push(busyProblem(cpu, mem));
       problems = found.filter(Boolean);
       checked = true;
-      facts = { ...facts, cpu, mem, os: facts.os ?? `${os.type()} ${os.release()}`, name: deviceName, checkedAt: new Date().toISOString() };
+      facts = { ...facts, cpu, mem, os: facts.os ?? `${os.type()} ${os.release()}`, name: deviceName, hostname: os.hostname(), checkedAt: new Date().toISOString() };
     } catch (err) {
       log.warn(`Health check failed: ${err.message}`);
     }

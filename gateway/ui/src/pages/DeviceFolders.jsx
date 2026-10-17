@@ -18,6 +18,7 @@ import DeviceSettings from "../components/DeviceSettings.jsx";
 import FolderLock from "../components/FolderLock.jsx";
 import DeviceCopies from "../components/DeviceCopies.jsx";
 import DeviceHealth from "../components/DeviceHealth.jsx";
+import DeviceRemote from "../components/DeviceRemote.jsx";
 import { DeviceAgent } from "../components/AgentUpdates.jsx";
 import DeviceService from "../components/DeviceService.jsx";
 import { inputClass, primaryButton, secondaryButton } from "../components/buttons.js";
@@ -337,6 +338,8 @@ export default function DeviceFolders() {
           needs it connected, so you can see its folders.
         </p>
       )}
+
+      <DeviceRemote remote={data.remote} platform={data.platform} />
 
       <DeviceHealth health={data.health} />
 

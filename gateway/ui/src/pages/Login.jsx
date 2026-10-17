@@ -30,6 +30,12 @@ export default function Login() {
         setNeedsCode(true);
         return;
       }
+      // Sent here by remote access (/remote/...): back there, as a full page (it isn't part of this app)
+      const back = new URLSearchParams(location.search).get("next");
+      if (back && back.startsWith("/remote/")) {
+        window.location.assign(back);
+        return;
+      }
       navigate(location.state?.from || "/", { replace: true });
     } catch (err) {
       setError(err.message);

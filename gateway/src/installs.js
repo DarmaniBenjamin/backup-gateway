@@ -193,7 +193,53 @@ function installerArgs(params, win = false) {
   return installerOptions(params, win).map(([name, value]) => (value === null ? name : `${name} ${q(value)}`));
 }
 
-function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
+// Remote access (remote.js): MeshCentral's agent, into the client's group, after the backup agent.
+// Over https only, and a problem with it never undoes the backup agent's install.
+function linuxRemoteStep(remote) {
+  if (!remote) return "";
+  const base = remote.url;
+  const msh = `${base}/meshsettings?id=${encodeURIComponent(remote.meshId)}`;
+  return `
+  # Remote access (desktop, terminal, files): MeshCentral's agent, over https only
+  echo "Installing remote access..."
+  case "$(uname -m)" in
+    x86_64 | amd64) ma=6 ;;
+    aarch64 | arm64) ma=26 ;;
+    armv7l | armhf) ma=25 ;;
+    *) ma="" ;;
+  esac
+  if [ -n "$ma" ] && mkdir -p "$tmp/remote" && (
+      cd "$tmp/remote" &&
+      curl -fsS --proto =https ${q(base)}"/meshagents?id=$ma" -o meshagent &&
+      curl -fsS --proto =https ${q(msh)} -o meshagent.msh &&
+      chmod 755 meshagent && ./meshagent -fullinstall >/dev/null 2>&1
+    ); then
+    echo "Remote access is on."
+  else
+    echo "Remote access couldn't be installed on this device (the backup agent is fine)." >&2
+  fi
+`;
+}
+
+function windowsRemoteStep(remote) {
+  if (!remote) return "";
+  const exe = `${remote.url}/meshagents?id=4&meshid=${encodeURIComponent(remote.meshId)}&installflags=0`;
+  return `
+    # Remote access (desktop, terminal, files): MeshCentral's agent, into this client's group
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host 'Installing remote access...'
+      try {
+        $ma = Join-Path $tmp 'meshagent.exe'
+        Invoke-WebRequest -UseBasicParsing -Uri ${q(exe)} -OutFile $ma
+        & $ma -fullinstall | Out-Null
+        Write-Host 'Remote access is on.'
+      } catch {
+        Write-Host "Remote access couldn't be installed on this PC (the backup agent is fine)." -ForegroundColor Yellow
+      }
+    }`;
+}
+
+function linuxScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64, remote = null }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.tar.gz`;
   const args = installerArgs({ code, options, gatewayUrl, updateKeyB64 });
   return `#!/usr/bin/env bash
@@ -226,7 +272,7 @@ main() {
   tar -xzf "$tmp/agent.tar.gz" -C "$tmp" --no-same-owner
   bash "$tmp/agent/install/linux/install.sh" \\
     ${args.join(" \\\n    ")} </dev/null
-}
+${linuxRemoteStep(remote)}}
 
 main "$@"
 `;
@@ -277,7 +323,7 @@ main "$@"
 
 // Run with "irm … | iex", so it never calls exit (that would close the person's PowerShell
 // window); the real installer runs as its own powershell.exe and reports back with its exit code.
-function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64 }) {
+function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, options, updateKeyB64, remote = null }) {
   const pkgUrl = `${gatewayUrl}/install/${token}/agent.zip`;
   const args = installerArgs({ code, options, gatewayUrl, updateKeyB64 }, true);
   return `# Backup agent install for ${cleanName(clientName)}, made by the backup gateway.
@@ -304,7 +350,7 @@ function windowsScript({ gatewayUrl, token, pkg, code, clientName, expiresAt, op
     Expand-Archive -Path (Join-Path $tmp 'agent.zip') -DestinationPath $tmp
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmp 'agent\\install\\windows\\install.ps1') \`
       ${args.join(" ")}
-    if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish (see above)." -ForegroundColor Red }
+    if ($LASTEXITCODE -ne 0) { Write-Host "The install didn't finish (see above)." -ForegroundColor Red }${windowsRemoteStep(remote)}
   } catch {
     Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
   } finally {
@@ -330,7 +376,8 @@ export function setupFileName(gatewayUrl, short) {
 }
 
 export function createInstalls({ config, store, agentPackage, windowsSetup, updateKey = null }) {
-  const links = new Map(); // token -> { code, clientName, expiresAt, options, short }
+  const links = new Map(); // token -> { code, clientName, expiresAt, options, short, remote }
+  let remoteAccess = null; // remote.js, given by index.js
   const shorts = new Map(); // short code -> token
 
   function prune() {
@@ -374,6 +421,8 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       expiresAt: link.expiresAt,
       options: link.options,
       updateKeyB64: updateKey?.publicKeyB64 ?? null,
+      // Remote access for this client, if it's on (fetched when the link was made; Synology: no desktop)
+      remote: link.options.platform === "synology" ? null : link.remote ?? null,
     });
   }
 
@@ -390,6 +439,13 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       do short = newShortCode();
       while (shorts.has(short));
       links.set(token, { code, clientName, expiresAt, options, short });
+      // Remote access: the client's group (made the first time), ready before the device asks
+      if (remoteAccess && options.platform !== "synology") {
+        remoteAccess.installInfo(clientName).then((r) => {
+          const l = links.get(token);
+          if (l && r) l.remote = r;
+        }).catch((err) => log.warn(`Remote access: no group for "${clientName}" (${err.message})`));
+      }
       shorts.set(short, token);
       // The same install for each address devices could use (best first: the domain, then this
       // computer's network addresses). The web UI lets you pick the one the device is on.
@@ -480,6 +536,10 @@ export function createInstalls({ config, store, agentPackage, windowsSetup, upda
       const link = token && links.get(token);
       if (!link || link.options.platform !== "windows" || !windowsSetup) return null;
       return { file: windowsSetup, name: setupFileName(agentApiUrl(config, req).url, link.short) };
+    },
+
+    useRemote(r) {
+      remoteAccess = r;
     },
 
     // The addresses an installed device can use, best first (sent to devices with their heartbeat):

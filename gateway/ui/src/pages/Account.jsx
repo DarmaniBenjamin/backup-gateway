@@ -2,9 +2,9 @@
 // code with an authenticator app, then type its code. Then 10 recovery codes are shown once, for a
 // lost phone. Turning it off, or making new recovery codes, needs the password and a code.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import qrcode from "qrcode-generator";
-import { Check, Copy, KeyRound, LoaderCircle, ShieldCheck, ShieldOff, TriangleAlert } from "lucide-react";
+import { Check, Copy, ExternalLink, KeyRound, LoaderCircle, Monitor, ShieldCheck, ShieldOff, TriangleAlert } from "lucide-react";
 import { api } from "../api.js";
 import { useAuth } from "../auth-context.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -182,6 +182,79 @@ function WithCode({ path, label, icon: Icon, danger = false, onDone }) {
   );
 }
 
+
+// Your own remote-access account (gateway/src/remote.js): the same name as here, its own password.
+// Remote access only opens after the gateway's own sign-in (with its two-factor), then asks for this.
+function RemoteAccess({ twoFactor }) {
+  const [status, setStatus] = useState(null);
+  const [form, setForm] = useState({ password: "", code: "", remotePassword: "", again: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(null);
+  useEffect(() => {
+    api.get("/remote").then(setStatus).catch(() => setStatus(null));
+  }, []);
+  if (!status?.installed) return null;
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const mismatch = form.again && form.again !== form.remotePassword;
+  return (
+    <section className="glass mt-6 rounded-lg border border-edge p-5">
+      <h2 className="flex items-center gap-2 font-medium">
+        <Monitor size={18} aria-hidden="true" /> Remote access
+      </h2>
+      {!status.running ? (
+        <p className="mt-1 text-sm text-dim">
+          {status.domain ? `Starting${status.error ? `: ${status.error}` : "…"}` : "Turns on once Domain & SSL is set up: remote control only ever runs over https."}
+        </p>
+      ) : done ? (
+        <div className="mt-2 space-y-3 text-sm">
+          <p className="text-good">Your remote-access password is set. Sign in there as {done.user}.</p>
+          <p className="text-dim">It only opens after you&rsquo;re signed in here (with your two-factor code), then asks for this password.</p>
+          <a href={done.url} target="_blank" rel="noopener noreferrer" className={`${primaryButton} w-full justify-center sm:w-auto`}>
+            <ExternalLink size={16} aria-hidden="true" /> Open remote access
+          </a>
+        </div>
+      ) : (
+        <form
+          className="mt-3 space-y-3"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError("");
+            try {
+              setDone(await api.post("/me/remote-password", form));
+            } catch (err) {
+              setError(err.message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <p className="text-sm text-dim">
+            Remote desktop, terminal and files sign in with their own password, so a stolen gateway password alone can&rsquo;t take over a
+            client&rsquo;s computer. Set or change yours here.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input className={inputClass} type="password" placeholder="New remote-access password (12+ characters)" autoComplete="new-password" value={form.remotePassword} onChange={set("remotePassword")} required />
+            <input className={inputClass} type="password" placeholder="The same again" autoComplete="new-password" value={form.again} onChange={set("again")} required />
+          </div>
+          <p className="text-xs text-dim">To confirm it&rsquo;s you:</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input className={inputClass} type="password" placeholder="Your gateway password" autoComplete="current-password" value={form.password} onChange={set("password")} required />
+            {twoFactor && <input className={inputClass} placeholder="Two-factor code" inputMode="numeric" autoComplete="one-time-code" value={form.code} onChange={set("code")} required />}
+          </div>
+          {mismatch && <p className="text-sm text-warn">The two passwords aren&rsquo;t the same.</p>}
+          {error && <p className="text-sm text-alert">{error}</p>}
+          <button type="submit" className={`${primaryButton} w-full justify-center sm:w-auto`} disabled={busy || mismatch || form.remotePassword.length < 12 || !form.password}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : <KeyRound size={16} />}
+            Set remote-access password
+          </button>
+        </form>
+      )}
+    </section>
+  );
+}
+
 export default function Account() {
   const { user, refresh } = useAuth();
   const [mode, setMode] = useState(null); // "codes" | "off"
@@ -224,6 +297,7 @@ export default function Account() {
           )}
         </div>
       </section>
+      <RemoteAccess twoFactor={on} />
       <p className="mt-4 text-xs text-dim">
         Lost your phone and the recovery codes? On the server, run <code className="font-mono text-fg">sudo npm run reset-2fa -- {user?.username}</code> in the gateway folder.
       </p>

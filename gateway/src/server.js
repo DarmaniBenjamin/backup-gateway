@@ -13,6 +13,7 @@
 //   POST /api/browse/result       (signed, encrypted) agent's answer to "list the folders in X"
 
 import http from "node:http";
+import net from "node:net";
 import crypto from "node:crypto";
 import { hashCode } from "./codes.js";
 import { verifyRequest, AuthError } from "./auth.js";
@@ -24,6 +25,7 @@ import { log } from "./logger.js";
 import { HELLO_ID } from "./address.js";
 import { installPage, deadLinkPage, tooManyPage, useDomainPage, needSetupLinkPage, PAGE_CSP } from "./install-page.js";
 import { SETUP_COOKIE, isSetupKey, isSetupCookie, setupCookieValue } from "./setup-key.js";
+import { REMOTE_PATH, REMOTE_PORT } from "./remote.js";
 
 const LIMIT_SMALL = 64 * 1024;           // control messages
 const LIMIT_CHUNK = CHUNK_SIZE + 1024;   // one sealed chunk + a little overhead
@@ -107,6 +109,41 @@ function cookieOf(req, name) {
     if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return null;
+}
+
+// Remote access (remote.js): https://<domain>/remote/... goes to MeshCentral on this computer, with
+// the caller's real address. Only through the domain, over https; in lockdown only the devices' own
+// agents keep their connection, no sessions.
+const isRemotePath = (pathname) => pathname === REMOTE_PATH || pathname.startsWith(`${REMOTE_PATH}/`);
+const REMOTE_AGENT = new RegExp(`^${REMOTE_PATH}/(agent\\.ashx|meshagents|meshsettings)`);
+// What the devices use (never a person's browser): open without a gateway sign-in. The session relay
+// only works with a token from MeshCentral's control channel, which is behind the sign-in.
+// Everything a person uses (pages, sign-in, control channel) needs a gateway session, so its
+// two-factor login: nobody even reaches remote access's own sign-in page without it.
+export const REMOTE_DEVICE = new RegExp(`^${REMOTE_PATH}/(agent\\.ashx|meshrelay\\.ashx|agenttransfer\\.ashx|meshagents|meshsettings)`);
+function remoteHeaders(req, ip) {
+  return { ...req.headers, "x-forwarded-for": ip, "x-forwarded-proto": "https", "x-forwarded-host": req.headers.host ?? "" };
+}
+function proxyRemote(req, res, ip) {
+  const p = http.request({ host: "127.0.0.1", port: REMOTE_PORT, method: req.method, path: req.url, headers: remoteHeaders(req, ip) }, (r) => {
+    res.writeHead(r.statusCode, r.headers);
+    r.pipe(res);
+  });
+  p.on("error", () => {
+    if (!res.headersSent) sendText(res, 502, "Remote access isn't answering. Try again in a minute.\n");
+    else res.destroy();
+  });
+  req.pipe(p);
+}
+function proxyRemoteUpgrade(req, socket, head, ip) {
+  const up = net.connect(REMOTE_PORT, "127.0.0.1", () => {
+    const lines = [`${req.method} ${req.url} HTTP/1.1`, ...Object.entries(remoteHeaders(req, ip)).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => `${k}: ${x}`) : [`${k}: ${v}`])), "", ""];
+    up.write(lines.join("\r\n"));
+    if (head?.length) up.write(head);
+    socket.pipe(up).pipe(socket);
+  });
+  up.on("error", () => socket.destroy());
+  socket.on("error", () => up.destroy());
 }
 
 function sendHtml(res, status, html) {
@@ -219,7 +256,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null, deviceHealth = null }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null, deviceHealth = null, remote = null, isLockedDown = () => false, isSignedIn = () => false }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -631,6 +668,18 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
       const pathname = url.split("?")[0];
       const live = address?.liveDomain?.() ?? null;
       const onDomain = live && hostName(req) === live && viaHttpsProxy(req);
+      // Remote access: MeshCentral, through the domain only (see proxyRemote above)
+      if (remote && isRemotePath(pathname)) {
+        if (!live || !onDomain || !remote.isRunning()) return sendText(res, 404, "Remote access isn't available here.\n");
+        if (isLockedDown() && !REMOTE_AGENT.test(pathname)) return sendText(res, 423, "Lockdown is on: remote sessions are blocked until it's lifted.\n");
+        if (!REMOTE_DEVICE.test(pathname) && !isSignedIn(cookieOf(req, "bg_session"))) {
+          // Sign in to the gateway first (two-factor), then straight back here
+          if (req.method !== "GET") return sendText(res, 401, "Sign in to the backup gateway first.\n");
+          res.writeHead(302, { Location: `/login?next=${encodeURIComponent(url)}`, "Cache-Control": "no-store" });
+          return res.end();
+        }
+        return proxyRemote(req, res, ip);
+      }
       if (!AGENT_PATH.test(pathname) && webUi && WEB_UI_ONLINE) {
         if (onDomain) {
           // Browsers that have been here once refuse plain http for the domain from then on
@@ -798,5 +847,16 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
 
   server.headersTimeout = 10_000;
   server.requestTimeout = 120_000;
+  // Live connections (WebSockets) for remote access: the same rules as above
+  server.on("upgrade", (req, socket, head) => {
+    const pathname = String(req.url ?? "").split("?")[0];
+    const live = address?.liveDomain?.() ?? null;
+    const ok = remote && isRemotePath(pathname) && live && hostName(req) === live && viaHttpsProxy(req) && remote.isRunning() &&
+      (!isLockedDown() || REMOTE_AGENT.test(pathname)) &&
+      (REMOTE_DEVICE.test(pathname) || isSignedIn(cookieOf(req, "bg_session")));
+    if (!ok) return socket.destroy();
+    proxyRemoteUpgrade(req, socket, head, clientIp(req));
+  });
+
   return server;
 }

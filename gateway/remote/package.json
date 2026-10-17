@@ -1,0 +1,8 @@
+{
+  "name": "backup-gateway-remote",
+  "private": true,
+  "description": "MeshCentral, for remote desktop, terminal and files (run by the gateway: src/remote.js)",
+  "dependencies": {
+    "meshcentral": "1.2.5"
+  }
+}

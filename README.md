@@ -255,6 +255,27 @@ shutting down without warning, a crash, a failing drive, a degraded RAID or a di
 alert that gets worse and becomes critical makes its ticket then. Nothing to change in Uplink: its
 Backup alerts integration already receives these.
 
+## Remote access (desktop, terminal, files)
+
+Each device's page has **Open desktop**, **Open terminal** and **Files**: a new browser tab, straight
+into that computer, with nothing to install on yours. It's MeshCentral (open source, pinned in
+`gateway/remote`), installed and run by the gateway itself on the same server:
+
+- At `https://<domain>/remote/`, and only once **Domain & SSL** says Done: it never runs without
+  https. MeshCentral listens on this computer only, with no other port.
+- New Windows and Linux devices get its agent with the usual install command, in their client's
+  group, and are matched to their gateway device by name. Synology NAS: no desktop to share, so no
+  remote agent. Devices installed before this don't have it yet: a way to add it to them comes next.
+- **Two locks.** Remote access only opens for someone signed in to the gateway, so after its
+  two-factor login; then it asks for your own remote-access password, set on the **Account** page
+  (which needs your gateway password and two-factor code). Devices' own connections are exempt.
+- No prompt on the device before a session (your company manages them). MeshCentral logs every
+  session. **Lockdown** blocks new sessions; devices stay connected.
+
+MeshCentral takes about 500 MB of disk and a few hundred MB of memory. After applying this the first
+time, pin its exact versions in the repo: `cd gateway/remote && npm install --package-lock-only`,
+then commit `gateway/remote/package-lock.json`.
+
 ## Signing in, two-factor login and lockdown
 
 The web UI is protected in layers:
