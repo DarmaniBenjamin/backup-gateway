@@ -191,10 +191,10 @@ function RemoteAccess({ twoFactor }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(null);
+  const [checkError, setCheckError] = useState("");
   useEffect(() => {
-    api.get("/remote").then(setStatus).catch(() => setStatus(null));
+    api.get("/remote").then(setStatus).catch((err) => setCheckError(err.message || "No answer"));
   }, []);
-  if (!status?.installed) return null;
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const mismatch = form.again && form.again !== form.remotePassword;
   return (
@@ -202,7 +202,15 @@ function RemoteAccess({ twoFactor }) {
       <h2 className="flex items-center gap-2 font-medium">
         <Monitor size={18} aria-hidden="true" /> Remote access
       </h2>
-      {!status.running ? (
+      {checkError ? (
+        <p className="mt-1 text-sm text-warn">Couldn&rsquo;t check remote access ({checkError}). Reload the page; if it stays, the gateway may need updating.</p>
+      ) : !status ? (
+        <p className="mt-1 text-sm text-dim">Checking…</p>
+      ) : !status.installed ? (
+        <p className="mt-1 text-sm text-warn">
+          Remote access isn&rsquo;t installed on this gateway yet. It&rsquo;s added when the gateway is updated (update-gateway installs it).
+        </p>
+      ) : !status.running ? (
         <p className="mt-1 text-sm text-dim">
           {status.domain ? `Starting${status.error ? `: ${status.error}` : "…"}` : "Turns on once Domain & SSL is set up: remote control only ever runs over https."}
         </p>

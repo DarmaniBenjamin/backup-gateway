@@ -212,7 +212,12 @@ function linuxRemoteStep(remote) {
       cd "$tmp/remote" &&
       curl -fsS --proto =https ${q(base)}"/meshagents?id=$ma" -o meshagent &&
       curl -fsS --proto =https ${q(msh)} -o meshagent.msh &&
-      chmod 755 meshagent && ./meshagent -fullinstall --copy-msh=1 >/dev/null 2>&1
+      chmod 755 meshagent && ./meshagent -fullinstall --copy-msh=1 >/dev/null 2>&1 &&
+      # Its settings into the installed agent's own folder, then restart it: on some Linux systems
+      # -fullinstall leaves them behind and the service never connects
+      if [ -d /usr/local/mesh_services/meshagent ]; then
+        cp meshagent.msh /usr/local/mesh_services/meshagent/meshagent.msh && { systemctl restart meshagent 2>/dev/null || true; }
+      fi
     ); then
     echo "Remote access is on."
   else
@@ -234,8 +239,10 @@ export function addRemoteCommand(platform, remote) {
   }
   const msh = `${remote.url}/meshsettings?id=${encodeURIComponent(remote.meshId)}`;
   // Run from the folder with its settings (meshagent.msh), and --copy-msh=1 so the installed agent keeps
-  // them, as MeshCentral's own installer does: without them it installs but never connects
-  return `d=$(mktemp -d) && cd "$d" && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o meshagent && curl -fsS --proto =https ${q(msh)} -o meshagent.msh && chmod 755 meshagent && sudo ./meshagent -fullinstall --copy-msh=1; cd ~; rm -rf "$d"`;
+  // them, as MeshCentral's own installer does; then copy them into the installed agent's folder and
+  // restart it anyway: on some Linux systems (Arch / Omarchy) -fullinstall still leaves them behind,
+  // and the service runs but never connects
+  return `d=$(mktemp -d) && cd "$d" && case "$(uname -m)" in aarch64|arm64) ma=26;; armv7l|armhf) ma=25;; *) ma=6;; esac && curl -fsS --proto =https ${q(remote.url)}"/meshagents?id=$ma" -o meshagent && curl -fsS --proto =https ${q(msh)} -o meshagent.msh && chmod 755 meshagent && sudo ./meshagent -fullinstall --copy-msh=1 && { [ ! -d /usr/local/mesh_services/meshagent ] || { sudo cp meshagent.msh /usr/local/mesh_services/meshagent/meshagent.msh && sudo systemctl restart meshagent; }; }; cd ~; rm -rf "$d"`;
 }
 
 function windowsRemoteStep(remote) {
