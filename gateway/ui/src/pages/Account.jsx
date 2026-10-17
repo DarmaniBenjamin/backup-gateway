@@ -195,7 +195,10 @@ export function RemoteAccess({ twoFactor }) {
   useEffect(() => {
     api.get("/remote").then(setStatus).catch((err) => setCheckError(err.message || "No answer"));
   }, []);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const set = (k) => (e) => {
+    const v = e.target.value;
+    setForm((f) => ({ ...f, [k]: v }));
+  };
   const mismatch = form.again && form.again !== form.remotePassword;
   return (
     <section className="glass mt-6 rounded-lg border border-edge p-5">
@@ -225,12 +228,30 @@ export function RemoteAccess({ twoFactor }) {
       ) : (
         <form
           className="mt-3 space-y-3"
+          noValidate
           onSubmit={async (e) => {
             e.preventDefault();
+            // What's in the fields right now: a password filled in by the browser or a password
+            // manager counts, even if the page wasn't told about it
+            const f = Object.fromEntries(new FormData(e.currentTarget));
+            const missing =
+              (f.remotePassword ?? "").length < 12
+                ? "Use at least 12 characters for the remote-access password."
+                : f.remotePassword !== f.again
+                  ? "The two remote-access passwords aren't the same."
+                  : !f.password
+                    ? "Enter your gateway password, to confirm it's you."
+                    : twoFactor && !String(f.code ?? "").trim()
+                      ? "Enter the code from your authenticator app."
+                      : "";
+            if (missing) {
+              setError(missing);
+              return;
+            }
             setBusy(true);
             setError("");
             try {
-              setDone(await api.post("/me/remote-password", form));
+              setDone(await api.post("/me/remote-password", { password: f.password, code: f.code ?? "", remotePassword: f.remotePassword }));
             } catch (err) {
               setError(err.message);
             } finally {
@@ -243,17 +264,17 @@ export function RemoteAccess({ twoFactor }) {
             client&rsquo;s computer. Set or change yours here.
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <input className={inputClass} type="password" placeholder="New remote-access password (12+ characters)" autoComplete="new-password" value={form.remotePassword} onChange={set("remotePassword")} required />
-            <input className={inputClass} type="password" placeholder="The same again" autoComplete="new-password" value={form.again} onChange={set("again")} required />
+            <input className={inputClass} type="password" placeholder="New remote-access password (12+ characters)" autoComplete="new-password" name="remotePassword" value={form.remotePassword} onChange={set("remotePassword")} />
+            <input className={inputClass} type="password" placeholder="The same again" autoComplete="new-password" name="again" value={form.again} onChange={set("again")} />
           </div>
           <p className="text-xs text-dim">To confirm it&rsquo;s you:</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <input className={inputClass} type="password" placeholder="Your gateway password" autoComplete="current-password" value={form.password} onChange={set("password")} required />
-            {twoFactor && <input className={inputClass} placeholder="Two-factor code" inputMode="numeric" autoComplete="one-time-code" value={form.code} onChange={set("code")} required />}
+            <input className={inputClass} type="password" placeholder="Your gateway password" autoComplete="current-password" name="password" value={form.password} onChange={set("password")} />
+            {twoFactor && <input className={inputClass} placeholder="Two-factor code" inputMode="numeric" autoComplete="one-time-code" name="code" value={form.code} onChange={set("code")} />}
           </div>
           {mismatch && <p className="text-sm text-warn">The two passwords aren&rsquo;t the same.</p>}
           {error && <p className="text-sm text-alert">{error}</p>}
-          <button type="submit" className={`${primaryButton} w-full justify-center sm:w-auto`} disabled={busy || mismatch || form.remotePassword.length < 12 || !form.password}>
+          <button type="submit" className={`${primaryButton} w-full justify-center sm:w-auto`} disabled={busy}>
             {busy ? <LoaderCircle size={16} className="animate-spin" /> : <KeyRound size={16} />}
             Set remote-access password
           </button>
