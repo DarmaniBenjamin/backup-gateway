@@ -52,10 +52,14 @@ const DEFAULT_DIR = path.join(here, "..", "remote", "node_modules", "meshcentral
 export const idToHex = (id) => Buffer.from(String(id).split("/").pop().replace(/@/g, "+").replace(/\$/g, "/"), "base64").toString("hex").toUpperCase();
 const sameName = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
 
-// MeshCentral's settings for this gateway
-export function meshConfig(domain) {
+// MeshCentral's settings for this gateway. home: its folder in the gateway's data folder. Everything
+// it writes goes there: the gateway's service can't write anywhere else (its program folder is
+// read-only), so its files and its own backups are kept there too, not next to MeshCentral. (Its
+// backups go beside its folder, not in it: MeshCentral won't keep them inside its own data.)
+export function meshConfig(domain, home = null) {
   return {
     settings: {
+      ...(home ? { filesPath: path.join(home, "files"), autoBackup: { backupPath: path.join(path.dirname(home), "meshcentral-backups"), backupIntervalHours: 24, keepLastDays: 7 } } : {}),
       cert: domain,
       port: REMOTE_PORT,
       portBind: "127.0.0.1",
@@ -158,7 +162,7 @@ export function createRemote({ dataDir, address, security = null, meshDir = proc
   // First time: MeshCentral's data folder, and the gateway's own account (done while it's stopped)
   async function prepare(domain) {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(home, "config.json"), JSON.stringify(meshConfig(domain), null, 2), { mode: 0o600 });
+    fs.writeFileSync(path.join(home, "config.json"), JSON.stringify(meshConfig(domain, home), null, 2), { mode: 0o600 });
     if (!account()) {
       const password = crypto.randomBytes(24).toString("base64url");
       await runMesh(["--createaccount", SERVICE_USER, "--pass", password, "--domain", DOMAIN, "--name", "Backup gateway"]);

@@ -18,6 +18,10 @@ test("MeshCentral listens on this computer only, behind https, no extra port, no
   assert.equal(c.settings.redirPort, 0);
   assert.equal(c.domains.remote.newAccounts, false);
   assert.equal(c.domains.remote.certUrl, "https://backup.acme.io:443/");
+  // Everything it writes stays in the gateway's data folder (its program folder is read-only)
+  const h = meshConfig("backup.acme.io", "/srv/gateway-data/remote");
+  assert.equal(h.settings.filesPath, "/srv/gateway-data/remote/files");
+  assert.equal(h.settings.autoBackup.backupPath, "/srv/gateway-data/meshcentral-backups");
 });
 
 test("MeshCentral ids become the hex its links and installers take", () => {
