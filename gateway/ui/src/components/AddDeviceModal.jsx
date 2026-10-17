@@ -134,7 +134,7 @@ function AddressPicker({ choices, value, onChange }) {
             role="radio"
             aria-checked={i === value}
             onClick={() => onChange(i)}
-            className={`rounded-md border px-3 py-1.5 font-mono text-xs ${
+            className={`rounded-md border px-3 py-2.5 font-mono text-xs ${
               i === value ? "border-signal bg-signal/10 text-fg" : "border-edge text-dim hover:text-fg"
             }`}
           >
@@ -237,7 +237,7 @@ function Result({ result, onClose }) {
             </>
           )}
           <details className="mt-5 text-sm">
-            <summary className="cursor-pointer text-dim hover:text-fg">Set it up by hand instead</summary>
+            <summary className="-my-2 cursor-pointer py-2 text-dim hover:text-fg">Set it up by hand instead</summary>
             <p className="mt-2 text-dim">Put this line in the agent&rsquo;s .env file, then start the agent:</p>
             <div className="mt-2">
               <CopyBox id="enroll-line" text={`AGENT_ENROLL_CODE=${result.code}`} label="Copy code line" />

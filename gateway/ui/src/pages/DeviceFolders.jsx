@@ -296,7 +296,7 @@ export default function DeviceFolders() {
 
   return (
     <div className="w-full">
-      <Link to="/devices" className="mb-4 inline-flex items-center gap-1.5 text-sm text-dim hover:text-fg">
+      <Link to="/devices" className="-mt-2.5 mb-1.5 inline-flex items-center gap-1.5 py-2.5 text-sm text-dim hover:text-fg">
         <ArrowLeft size={16} aria-hidden="true" />
         Devices
       </Link>

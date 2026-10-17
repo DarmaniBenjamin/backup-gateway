@@ -177,7 +177,7 @@ export default function Layout() {
             <span className="font-display text-[17px] font-semibold">Backup Gateway</span>
           </Link>
 
-          <nav className="hidden h-full items-stretch lg:flex" aria-label="Main">
+          <nav className="hidden h-full items-stretch xl:flex" aria-label="Main">
             {NAV.filter((item) => !item.more).map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={tabClass}>
                 {item.label}
@@ -204,7 +204,7 @@ export default function Layout() {
               onClick={() => setMenuOpen(true)}
               aria-expanded={menuOpen}
               aria-label="Open menu"
-              className="flex h-9 w-9 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg lg:hidden"
+              className="flex h-10 w-10 items-center justify-center rounded-md text-dim hover:bg-raised hover:text-fg xl:hidden"
             >
               <Menu size={20} />
             </button>
@@ -214,7 +214,7 @@ export default function Layout() {
 
       {/* Phone / tablet menu: slides in over the page from the right, nothing moves underneath */}
       {menuOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+        <div className="fixed inset-0 z-50 xl:hidden" role="dialog" aria-modal="true" aria-label="Menu">
           <button
             type="button"
             aria-label="Close menu"

@@ -30,7 +30,7 @@ function Switch({ checked, onChange, label, hint }) {
         aria-checked={checked}
         aria-label={label}
         onClick={() => onChange(!checked)}
-        className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? "bg-signal" : "bg-raised ring-1 ring-edge"}`}
+        className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors before:absolute before:-inset-3 before:content-[''] ${checked ? "bg-signal" : "bg-raised ring-1 ring-edge"}`}
       >
         <span
           className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-fg transition-transform ${checked ? "translate-x-5.5" : "translate-x-0.5"}`}
@@ -232,7 +232,7 @@ export default function DeviceSettings({ deviceId, settings, status, live, disab
                 <input
                   type="radio"
                   name="scanMode"
-                  className="mt-1 accent-signal"
+                  className="mt-0.5 size-5 shrink-0 accent-signal"
                   checked={form.scanMode === "live"}
                   onChange={() => set("scanMode", "live")}
                 />
@@ -245,7 +245,7 @@ export default function DeviceSettings({ deviceId, settings, status, live, disab
                 <input
                   type="radio"
                   name="scanMode"
-                  className="mt-1 accent-signal"
+                  className="mt-0.5 size-5 shrink-0 accent-signal"
                   checked={form.scanMode === "scheduled"}
                   onChange={() => set("scanMode", "scheduled")}
                 />

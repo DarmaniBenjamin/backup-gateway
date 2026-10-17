@@ -33,7 +33,7 @@ function DeviceRow({ d, update, gatewayVersion }) {
     <li className="grid gap-4 px-5 py-4 md:grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))] md:items-center">
       <div className="flex items-start justify-between gap-3 md:block">
         <div className="min-w-0">
-          <Link to={`/devices/${d.id}`} className="block truncate font-medium hover:text-signal" title="Backup folders">
+          <Link to={`/devices/${d.id}`} className="-my-1.5 block truncate py-1.5 font-medium hover:text-signal" title="Backup folders">
             {d.name}
           </Link>
           <p className="truncate font-mono text-xs text-secure/70" title="Device ID">
@@ -172,7 +172,7 @@ function RemovedDevices({ devices, reload }) {
             {devices.map((d) => (
               <li key={d.id} className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0 text-sm">
-                  <Link to={`/devices/${d.id}`} className="text-fg hover:text-signal hover:underline">
+                  <Link to={`/devices/${d.id}`} className="-my-2 inline-block py-2 text-fg hover:text-signal hover:underline">
                     {d.name}
                   </Link>
                   <p className="text-xs text-dim">

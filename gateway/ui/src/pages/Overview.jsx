@@ -285,7 +285,7 @@ export default function Overview() {
         <section>
           <div className="mb-3 flex items-baseline justify-between">
             <h2 className="font-semibold">Devices</h2>
-            <Link to="/devices" className="text-sm text-signal hover:underline">
+            <Link to="/devices" className="-my-2 inline-block py-2 text-sm text-signal hover:underline">
               Manage devices
             </Link>
           </div>

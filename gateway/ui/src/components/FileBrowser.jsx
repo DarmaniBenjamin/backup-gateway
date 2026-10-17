@@ -26,7 +26,7 @@ export default function FileBrowser({ deviceId, at, path, onOpenFolder, onShowVe
   return (
     <div>
       <nav aria-label="Folder" className="mb-3 flex flex-wrap items-center gap-1 text-sm">
-        <button type="button" onClick={() => onOpenFolder("")} className="rounded px-1 text-dim hover:text-fg">
+        <button type="button" onClick={() => onOpenFolder("")} className="-my-2 rounded px-1.5 py-2 text-dim hover:text-fg">
           All files
         </button>
         {parts.map((name, i) => (
@@ -35,7 +35,7 @@ export default function FileBrowser({ deviceId, at, path, onOpenFolder, onShowVe
             <button
               type="button"
               onClick={() => onOpenFolder(parts.slice(0, i + 1).join("/"))}
-              className={`rounded px-1 ${i === parts.length - 1 ? "text-fg" : "text-dim hover:text-fg"}`}
+              className={`-my-2 rounded px-1.5 py-2 ${i === parts.length - 1 ? "text-fg" : "text-dim hover:text-fg"}`}
             >
               {name}
             </button>
