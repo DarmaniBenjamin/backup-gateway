@@ -314,7 +314,8 @@ export function createAdminApi({ db, store, keys, storage, config, broker, insta
     async "POST /me/remote-password"({ admin, body, ip }) {
       if (!remote) throw new ApiError(404, "Remote access isn't part of this gateway.");
       const a = await checkPassword(admin, body.password);
-      if (a.totp_secret && !useCode(a, body.code)) throw new ApiError(400, "That two-factor code isn't right.");
+      if (!a.totp_secret) throw new ApiError(409, "Turn on two-factor login first (Account page): remote access needs it.");
+      if (!useCode(a, body.code)) throw new ApiError(400, "That two-factor code isn't right.");
       const pass = String(body.remotePassword ?? "");
       if (pass.length < 12) throw new ApiError(400, "Use at least 12 characters for the remote-access password.");
       try {

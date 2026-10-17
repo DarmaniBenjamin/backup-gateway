@@ -35,7 +35,8 @@ fake.on("upgrade", (req, sock) => sock.end("HTTP/1.1 101 Switching Protocols\r\n
 await new Promise((r) => fake.listen(4499, "127.0.0.1", r));
 test.after(() => fake.close());
 
-const SESSION = "good-session";
+const SESSION = "good-session"; // signed in, two-factor on
+const NO_2FA = "no-2fa-session"; // signed in, two-factor off
 async function gateway({ live = "backup.acme.io", locked = false } = {}) {
   const server = createServer({
     db: {}, keys: {}, storage: {}, guard: {}, broker: {}, installs: null,
@@ -43,7 +44,8 @@ async function gateway({ live = "backup.acme.io", locked = false } = {}) {
     webUi: (req, res) => res.end("WEB UI"),
     remote: { isRunning: () => true },
     isLockedDown: () => locked,
-    isSignedIn: (token) => token === SESSION,
+    isSignedIn: (token) => token === SESSION || token === NO_2FA,
+    hasTwoFactor: (token) => token === SESSION,
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   return server;
@@ -81,6 +83,16 @@ test("a person not signed in to the gateway is sent to its sign-in first, then b
   assert.equal(r.status, 302);
   assert.equal(r.headers.location, "/login?next=%2Fremote%2F%3Fgotonode%3DAB%26viewmode%3D11");
   assert.equal(await upgrade(g, "/remote/control.ashx"), "refused", "nor MeshCentral's control channel");
+});
+
+test("signed in without two-factor login: sent to turn it on, no live connections", async (t) => {
+  const g = await gateway();
+  t.after(() => g.close());
+  const r = await get(g, "/remote/", { ...viaCaddy, Cookie: `bg_session=${NO_2FA}` });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.location, "/remote-access?twofactor=required");
+  assert.equal(await upgrade(g, "/remote/control.ashx", { ...viaCaddy, Cookie: `bg_session=${NO_2FA}` }), "refused");
+  assert.equal(await upgrade(g, "/remote/agent.ashx"), "upgraded", "devices are never affected");
 });
 
 test("signed in to the gateway: through to MeshCentral, pages and live connections", async (t) => {

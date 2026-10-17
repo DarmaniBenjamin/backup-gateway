@@ -256,7 +256,7 @@ function cleanFolderReports(list) {
   );
 }
 
-export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null, deviceHealth = null, remote = null, isLockedDown = () => false, isSignedIn = () => false }) {
+export function createServer({ db, keys, storage, guard, broker, installs, security = null, scanner = null, updates = null, agentPackage = null, removals = null, address = null, webUi = null, setupKey = null, deviceHealth = null, remote = null, isLockedDown = () => false, isSignedIn = () => false, hasTwoFactor = () => false }) {
   const jobChunkCache = new Map(); // job id -> Set of chunk IDs that job is allowed to download
 
   // Keys for a device, or an error if it hasn't done the key exchange
@@ -678,6 +678,12 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
           res.writeHead(302, { Location: `/login?next=${encodeURIComponent(url)}`, "Cache-Control": "no-store" });
           return res.end();
         }
+        if (!REMOTE_DEVICE.test(pathname) && !hasTwoFactor(cookieOf(req, "bg_session"))) {
+          // Signed in, but without two-factor login: remote access needs it
+          if (req.method !== "GET") return sendText(res, 403, "Turn on two-factor login first (Account page).\n");
+          res.writeHead(302, { Location: "/remote-access?twofactor=required", "Cache-Control": "no-store" });
+          return res.end();
+        }
         return proxyRemote(req, res, ip);
       }
       if (!AGENT_PATH.test(pathname) && webUi && WEB_UI_ONLINE) {
@@ -853,7 +859,7 @@ export function createServer({ db, keys, storage, guard, broker, installs, secur
     const live = address?.liveDomain?.() ?? null;
     const ok = remote && isRemotePath(pathname) && live && hostName(req) === live && viaHttpsProxy(req) && remote.isRunning() &&
       (!isLockedDown() || REMOTE_AGENT.test(pathname)) &&
-      (REMOTE_DEVICE.test(pathname) || isSignedIn(cookieOf(req, "bg_session")));
+      (REMOTE_DEVICE.test(pathname) || hasTwoFactor(cookieOf(req, "bg_session")));
     if (!ok) return socket.destroy();
     proxyRemoteUpgrade(req, socket, head, clientIp(req));
   });

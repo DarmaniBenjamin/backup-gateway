@@ -79,7 +79,9 @@ export function meshConfig(domain, home = null) {
         title: "Remote access",
         newAccounts: false,
         certUrl: `https://${domain}:443/`,
-        passwordRequirements: { force2factor: true, min: 12 },
+        // Two-factor is the gateway's: remote access only opens for a gateway account with it on
+        // (server.js), so MeshCentral doesn't ask for a second one of its own
+        passwordRequirements: { min: 12 },
         // Unattended devices managed by your company: no prompt on the device before a session
         desktopNotify: false,
       },

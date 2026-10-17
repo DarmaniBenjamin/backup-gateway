@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import qrcode from "qrcode-generator";
+import { Link } from "react-router";
 import { Check, Copy, ExternalLink, KeyRound, LoaderCircle, Monitor, ShieldCheck, ShieldOff, TriangleAlert } from "lucide-react";
 import { api } from "../api.js";
 import { useAuth } from "../auth-context.js";
@@ -212,6 +213,14 @@ export function RemoteAccess({ twoFactor }) {
       ) : !status.installed ? (
         <p className="mt-1 text-sm text-warn">
           Remote access isn&rsquo;t installed on this gateway yet. It&rsquo;s added when the gateway is updated (update-gateway installs it).
+        </p>
+      ) : !twoFactor ? (
+        <p className="mt-1 text-sm text-warn">
+          Remote access needs two-factor login on your gateway account. Turn it on at the top of the{" "}
+          <Link to="/account" className="-my-2 inline-block py-2 underline">
+            Account
+          </Link>{" "}
+          page, then set your remote-access password here.
         </p>
       ) : !status.running ? (
         <p className="mt-1 text-sm text-dim">

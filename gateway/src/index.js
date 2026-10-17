@@ -75,9 +75,14 @@ const remote = createRemote({ dataDir: config.dataDir, address, security });
 installs.useRemote?.(remote);
 // (lockdown is made below; this is only called later)
 const isLockedDown = () => lockdown.isOn();
-// Remote access for people needs a gateway session (so its two-factor login), see server.js
+// Remote access for people: a gateway session (isSignedIn), of an account with two-factor login on
+// (hasTwoFactor), see server.js
 const isSignedIn = (token) => !!store.findSession(token);
-const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi, setupKey, deviceHealth, remote, isLockedDown, isSignedIn });
+const hasTwoFactor = (token) => {
+  const s = store.findSession(token);
+  return !!(s && store.adminById(s.admin_id)?.totp_secret);
+};
+const server = createServer({ db, keys, storage, guard, broker, installs, security, scanner, updates, agentPackage, removals, address, webUi, setupKey, deviceHealth, remote, isLockedDown, isSignedIn, hasTwoFactor });
 // Off-site copies: the failsafe (everything) and each device's own (see cloud/copies.js)
 const copies = createCopies({ db, dataDir: config.dataDir, storage, security });
 // Alerts by phone push, email or webhook, and the checks for devices offline and disk space
